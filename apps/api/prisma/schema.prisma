@@ -1,0 +1,746 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                   String                @id @default(cuid())
+  handle               String                @unique
+  email                String                @unique
+  name                 String?
+  passwordHash         String?
+  needsOnboarding      Boolean               @default(false)
+  timezone             String                @default("UTC")
+  workingHoursStart    Int                   @default(9)
+  workingHoursEnd      Int                   @default(18)
+  workingDays          Int[]                 @default([1, 2, 3, 4, 5])
+  bufferMinutes        Int                   @default(0)
+  aiTools              String[]              @default([])
+  recordingPref        String                @default("ASK")
+  handleVisibility     String                @default("PUBLIC")
+  verificationLevel    String                @default("BASIC")
+  isHumanVerified      Boolean               @default(false)
+  verifiedAt           DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  autoApproveMeetings  Boolean               @default(false)
+  busyBlockSyncMinutes Int                   @default(60)
+  busyBlockTitle       String                @default("Busy (Bolo)")
+  lastBusyBlockSyncAt  DateTime?
+  plan                 String                @default("FREE") // FREE, PRO, BUILDER
+  stripeCustomerId     String?               @unique
+  stripeSubscriptionId String?
+  planExpiresAt        DateTime?
+  betaAccess           Boolean               @default(false)
+  isSuperAdmin         Boolean               @default(false)
+  apiKeys              ApiKey[]
+  approvedContacts     ApprovedContact[]
+  bookingProfiles      BookingProfile[]
+  calendarConnections  CalendarConnection[]
+  identities           UserIdentity[]
+  identityVerification IdentityVerification?
+  meetingRequests      MeetingRequest[]      @relation("Organizer")
+  participants         Participant[]
+  emails               UserEmail[]
+  verificationRequests VerificationRequest[]
+  grantsGiven          Grant[]               @relation("GrantsGiven")
+  grantsReceived       Grant[]               @relation("GrantsReceived")
+  registeredWidgets    Widget[]              @relation("RegisteredWidgets")
+  usageRecords         UsageRecord[]
+
+  @@index([email])
+  @@index([handle])
+  @@index([verificationLevel])
+  @@index([stripeCustomerId])
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  userId      String
+  name        String
+  keyHash     String    @unique
+  keyPrefix   String
+  permissions String[]  @default(["availability:read"])
+  lastUsedAt  DateTime?
+  usageCount  Int       @default(0)
+  isActive    Boolean   @default(true)
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([keyHash])
+  @@index([keyPrefix])
+}
+
+model UserEmail {
+  id         String    @id @default(cuid())
+  userId     String
+  email      String    @unique
+  isPrimary  Boolean   @default(false)
+  isVerified Boolean   @default(false)
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email])
+  @@index([userId])
+}
+
+// Feature/lookup table for identity types
+model IdentityType {
+  id          String         @id @default(cuid())
+  code        String         @unique // BOLO_HANDLE, EMAIL, TWITTER, INSTAGRAM, LINKEDIN, etc.
+  name        String         // Display name: "Bolo Handle", "Email", "Twitter/X", etc.
+  icon        String?        // Icon identifier for UI
+  urlPattern  String?        // Pattern for profile URLs: "https://twitter.com/{value}"
+  isActive    Boolean        @default(true)
+  sortOrder   Int            @default(0)
+  createdAt   DateTime       @default(now())
+  identities  UserIdentity[]
+}
+
+// User's identities across platforms
+model UserIdentity {
+  id             String       @id @default(cuid())
+  userId         String
+  identityTypeId String
+  value          String       // Normalized value (lowercase)
+  displayValue   String?      // Original display format (@MyHandle)
+  isPrimary      Boolean      @default(false)
+  isVerified     Boolean      @default(false)
+  verifiedAt     DateTime?
+  visibility     String       @default("BOLO_ONLY") // PUBLIC, BOLO_ONLY, TRUSTED, HIDDEN
+  metadata       Json?        // Platform-specific data
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  identityType   IdentityType @relation(fields: [identityTypeId], references: [id])
+
+  @@unique([identityTypeId, value]) // Each identity is globally unique per type
+  @@index([userId])
+  @@index([identityTypeId, value])
+  @@index([value])
+  @@index([visibility])
+}
+
+model CalendarConnection {
+  id                String           @id @default(cuid())
+  userId            String
+  provider          CalendarProvider
+  connectionType    ConnectionType   @default(OAUTH)
+  providerAccountId String?
+  accessToken       String?
+  refreshToken      String?
+  tokenType         String           @default("Bearer")
+  expiresAt         DateTime?
+  scope             String?
+  bookingLink       String?
+  caldavUrl         String?
+  caldavUsername    String?
+  caldavPassword    String?
+  syncToken         String?
+  lastSyncedAt      DateTime?
+  syncStatus        String           @default("PENDING")
+  syncError         String?
+  webhookChannelId  String?
+  webhookExpiration DateTime?
+  webhookResourceId String?
+  isPrimary         Boolean          @default(false)
+  isEnabled         Boolean          @default(true)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  accountEmail      String?
+  calendars         Calendar[]
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  meetingRequests   MeetingRequest[] // Meetings that prefer this connection for video conferencing
+  bookingProfiles   BookingProfile[]
+
+  @@unique([userId, provider, providerAccountId])
+  @@index([userId])
+  @@index([provider])
+  @@index([webhookExpiration])
+}
+
+model Calendar {
+  id           String             @id @default(cuid())
+  connectionId String
+  externalId   String
+  name         String
+  description  String?
+  color        String?
+  isPrimary    Boolean            @default(false)
+  isSelected   Boolean            @default(true)
+  isBusyBlock  Boolean            @default(false)
+  accessRole   String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  connection      CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  routingContacts ApprovedContact[]  // Contacts that route meetings to this calendar
+
+  @@unique([connectionId, externalId])
+  @@index([connectionId])
+}
+
+model MeetingRequest {
+  id                 String        @id @default(cuid())
+  organizerId        String
+  title              String
+  description        String?
+  duration           Int
+  dateRangeStart     DateTime
+  dateRangeEnd       DateTime
+  timezone           String        @default("UTC")
+  workingHoursOnly   Boolean       @default(true)
+  customHoursStart   Int?
+  customHoursEnd     Int?
+  customDays         Int[]
+  bufferBefore       Int           @default(0)
+  bufferAfter        Int           @default(0)
+  shareCode          String        @unique @default(cuid())
+  shareLinkExpires   DateTime?
+  requiresAuth       Boolean       @default(false)
+  workflow           String        @default("MANUAL")
+  status             String        @default("PENDING")
+  confirmedStartTime DateTime?
+  confirmedEndTime   DateTime?
+  meetingLink        String?
+  recordingPolicy    String        @default("ALLOWED")
+  approvedTools      String[]      @default([])
+  responseDeadlineHours Int        @default(48) // Hours until external invitations expire
+  preferredConnectionId String?    // Calendar connection to use for creating event
+  createVideoConference Boolean    @default(true) // Auto-generate Google Meet or Teams link
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  organizer          User          @relation("Organizer", fields: [organizerId], references: [id], onDelete: Cascade)
+  participants       Participant[]
+  preferredConnection CalendarConnection? @relation(fields: [preferredConnectionId], references: [id])
+  hoursOverrideRequests HoursOverrideRequest[]
+
+  @@index([organizerId])
+  @@index([preferredConnectionId])
+  @@index([shareCode])
+  @@index([status])
+  @@index([dateRangeStart, dateRangeEnd])
+}
+
+model Participant {
+  id                    String             @id @default(cuid())
+  meetingRequestId      String
+  userId                String?
+  email                 String
+  name                  String?
+  role                  String             @default("INVITEE") // ORGANIZER or INVITEE
+  responseStatus        String             @default("PENDING")
+  respondedAt           DateTime?
+  useConnectedCalendar  Boolean            @default(false)
+  aiToolsForMeeting     String[]           @default([])
+  recordingConsent      String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  invitationRespondedAt DateTime?
+  invitationStatus      String             @default("PENDING_APPROVAL")
+  invitationExpiresAt   DateTime?          // When invitation times out for external users
+  isHidden              Boolean            @default(false) // Allow participants to hide meetings from their view
+  availabilitySlots     AvailabilitySlot[]
+  invitationToken       InvitationToken?
+  meetingRequest        MeetingRequest     @relation(fields: [meetingRequestId], references: [id], onDelete: Cascade)
+  user                  User?              @relation(fields: [userId], references: [id])
+
+  @@unique([meetingRequestId, email])
+  @@index([meetingRequestId])
+  @@index([userId])
+  @@index([email])
+  @@index([role])
+}
+
+model AvailabilitySlot {
+  id            String      @id @default(cuid())
+  participantId String
+  startTime     DateTime
+  endTime       DateTime
+  timezone      String      @default("UTC")
+  source        String      @default("MANUAL")
+  preference    String      @default("AVAILABLE")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@index([participantId])
+  @@index([startTime, endTime])
+}
+
+model InvitationToken {
+  id            String      @id @default(cuid())
+  participantId String      @unique
+  token         String      @unique @default(cuid())
+  expiresAt     DateTime
+  usedAt        DateTime?
+  emailSentAt   DateTime?
+  emailStatus   String      @default("PENDING") // PENDING, SENT, FAILED, BOUNCED, DELIVERED
+  emailError    String?     // Error message if failed
+  emailMessageId String?    // Resend message ID for tracking
+  emailRetryCount Int       @default(0)
+  lastRetryAt   DateTime?
+  createdAt     DateTime    @default(now())
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([expiresAt])
+  @@index([emailStatus])
+}
+
+model BookingProfile {
+  id               String              @id @default(cuid())
+  userId           String
+  connectionId     String?
+  slug             String
+  name             String
+  description      String?
+  durations        Int[]               @default([30, 60])
+  customHoursStart Int?
+  customHoursEnd   Int?
+  customDays       Int[]
+  bufferBefore     Int                 @default(0)
+  bufferAfter      Int                 @default(0)
+  isActive         Boolean             @default(true)
+  visibility       String              @default("PUBLIC")
+  recordingPolicy  String?
+  routingRules     Json?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connection       CalendarConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, slug])
+  @@index([userId])
+  @@index([connectionId])
+}
+
+model ApprovedContact {
+  id                 String    @id @default(cuid())
+  userId             String
+  contactEmail       String?
+  contactUserId      String?
+  status             String    @default("APPROVED")
+  allowedProfiles    String[]  @default([])
+  approvedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  autoApproveInvites Boolean   @default(false)
+  autoShareCalendar  Boolean   @default(false)
+  contactHandle      String?
+  preferredCalendarId String?   // Route meetings from this contact to specific calendar
+
+  // Structured rules
+  priority           String    @default("MEDIUM") // LOW, MEDIUM, HIGH, VIP
+  maxDuration        Int?      // Max meeting duration in minutes (null = no limit)
+  maxFrequency       String?   // UNLIMITED, DAILY, WEEKLY, MONTHLY
+  category           String?   // Custom category: "team", "external", "recruiters", "clients"
+  notes              String?   // Free-form notes about this contact
+
+  // Per-contact custom bookable hours (null = use user defaults)
+  customHoursStart     Int?      // 0-23, e.g., 7 for 7am
+  customHoursEnd       Int?      // 0-23, e.g., 21 for 9pm
+  customDays           Int[]     // Empty array = use user defaults
+  allowOverrideRequest Boolean   @default(false) // Can this contact request outside-hours meetings?
+
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preferredCalendar  Calendar? @relation(fields: [preferredCalendarId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, contactHandle])
+  @@unique([userId, contactEmail])
+  @@unique([userId, contactUserId])
+  @@index([userId])
+  @@index([contactHandle])
+  @@index([contactEmail])
+  @@index([category])
+}
+
+model HoursOverrideRequest {
+  id               String    @id @default(cuid())
+  meetingRequestId String
+  requestorUserId  String    // The organizer requesting wider hours
+  targetUserId     String    // The participant whose hours need overriding
+  requestedStart   Int       // Requested start hour (0-23)
+  requestedEnd     Int       // Requested end hour (0-23)
+  requestedDays    Int[]     // Requested days, empty = any
+  reason           String?   // Optional reason from requester
+  status           String    @default("PENDING") // PENDING, APPROVED, DECLINED, EXPIRED
+  expiresAt        DateTime
+  respondedAt      DateTime?
+  responseNote     String?   // Optional note from responder
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  meetingRequest   MeetingRequest @relation(fields: [meetingRequestId], references: [id], onDelete: Cascade)
+
+  @@index([targetUserId, status])
+  @@index([meetingRequestId])
+}
+
+model ServiceTerms {
+  id             String        @id @default(cuid())
+  provider       String        @unique
+  termsUrl       String
+  privacyUrl     String?
+  lastFetchedAt  DateTime
+  termsHash      String
+  summary        Json
+  dataCollection Json
+  dataRetention  Json
+  dataSharing    Json
+  aiTraining     Boolean
+  canSellData    Boolean
+  privacyScore   Int
+  riskLevel      String
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  changes        TermsChange[]
+
+  @@index([provider])
+}
+
+model TermsChange {
+  id             String              @id @default(cuid())
+  serviceTermsId String
+  changeType     String
+  section        String
+  previousText   String?
+  newText        String?
+  summary        String
+  severity       String
+  userAction     String?
+  detectedAt     DateTime            @default(now())
+  serviceTerms   ServiceTerms        @relation(fields: [serviceTermsId], references: [id], onDelete: Cascade)
+  notifications  TermsNotification[]
+
+  @@index([serviceTermsId])
+  @@index([detectedAt])
+}
+
+model TermsNotification {
+  id             String      @id @default(cuid())
+  userId         String
+  termsChangeId  String
+  status         String      @default("PENDING")
+  sentAt         DateTime?
+  readAt         DateTime?
+  acknowledgedAt DateTime?
+  createdAt      DateTime    @default(now())
+  termsChange    TermsChange @relation(fields: [termsChangeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, termsChangeId])
+  @@index([userId])
+}
+
+model PrivacyReport {
+  id               String   @id @default(cuid())
+  userId           String
+  generatedAt      DateTime @default(now())
+  reportData       Json
+  totalServices    Int
+  highRiskCount    Int
+  dataPointsShared Int
+  overallScore     Int
+  exportFormat     String?
+  exportUrl        String?
+
+  @@index([userId])
+  @@index([generatedAt])
+}
+
+model ApprovalRequest {
+  id              String    @id @default(cuid())
+  userId          String
+  requestorHandle String?
+  requestorEmail  String?
+  requestorName   String?
+  agentName       String?
+  actionType      String
+  actionDetails   Json
+  meetingTitle    String?
+  meetingDuration Int?
+  proposedTimes   Json?
+  status          String    @default("PENDING")
+  expiresAt       DateTime
+  respondedAt     DateTime?
+  responseNote    String?
+  notifiedVia     String[]  @default([])
+  lastNotifiedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id                String   @id @default(cuid())
+  userId            String
+  action            String
+  actionDetails     Json
+  agentName         String?
+  requestorHandle   String?
+  requestorEmail    String?
+  status            String
+  errorMessage      String?
+  approvalRequestId String?
+  createdAt         DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([action])
+}
+
+model VerificationRequest {
+  id                String                @id @default(cuid())
+  userId            String
+  requestedLevel    VerificationLevel     @default(VERIFIED)
+  provider          VerificationProvider?
+  providerSessionId String?
+  status            String                @default("PENDING")
+  failureReason     String?
+  failureCode       String?
+  initiatedAt       DateTime              @default(now())
+  completedAt       DateTime?
+  expiresAt         DateTime
+  attemptNumber     Int                   @default(1)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([providerSessionId])
+}
+
+model IdentityVerification {
+  id                  String               @id @default(cuid())
+  userId              String               @unique
+  verificationLevel   VerificationLevel
+  provider            VerificationProvider
+  verifiedAt          DateTime
+  expiresAt           DateTime?
+  idDocumentVerified  Boolean              @default(false)
+  livenessCheckPassed Boolean              @default(false)
+  addressVerified     Boolean              @default(false)
+  ageVerified         Boolean              @default(false)
+  organizationId      String?
+  organizationName    String?
+  organizationDomain  String?
+  employmentVerified  Boolean              @default(false)
+  providerUserId      String?
+  trustScore          Int?
+  isRevoked           Boolean              @default(false)
+  revokedAt           DateTime?
+  revokedReason       String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([verificationLevel])
+  @@index([provider])
+}
+
+model VerificationRequirement {
+  id              String            @id @default(cuid())
+  actionType      String
+  requiredLevel   VerificationLevel
+  scope           String            @default("GLOBAL")
+  scopeId         String?
+  createdByUserId String?
+  isActive        Boolean           @default(true)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([actionType, scope, scopeId])
+  @@index([actionType])
+  @@index([scope])
+}
+
+model VerificationEvent {
+  id        String                @id @default(cuid())
+  userId    String
+  eventType String
+  requestId String?
+  provider  VerificationProvider?
+  details   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime              @default(now())
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([createdAt])
+}
+
+// ─── Bolo Core: Permission Categories ───────────────────────────────────────
+// Widgets are permission categories. Built-in ones are seeded by Bolo.
+// Third-party apps can register their own widgets via the Widget Registration API.
+// Data flows: Agent → Bolo API → User's connected services → Bolo API → Agent
+// The agent NEVER touches the user's raw tokens or services directly.
+
+model Widget {
+  id             String   @id @default(cuid())
+  slug           String   @unique // "calendar", "dating", "scheduling"
+  name           String   // "Calendar", "Dating", "Scheduling"
+  description    String?  // "Availability, scheduling, and event access"
+  icon           String?  // Emoji or icon identifier
+  scopes         String[] // Available scopes: ["free_busy", "events:read", "events:create"]
+  tosUrl         String?  // URL to the widget's terms of service
+  isActive       Boolean  @default(true)
+  registeredById String?  // If registered by a third-party app (user ID of the app)
+  registeredBy   User?    @relation("RegisteredWidgets", fields: [registeredById], references: [id])
+  adminIds       String[] // User IDs with admin access to manage this widget
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([slug])
+  @@index([registeredById])
+}
+
+// ─── Bolo Core: Agent-to-Agent Relay ─────────────────────────────────────────
+// General-purpose messaging through the trust boundary.
+// Agents query each other; only crafted responses cross the wall.
+
+model RelayMessage {
+  id              String    @id @default(cuid())
+  conversationId  String?   // Optional: group messages into a thread
+  senderHandle    String    // @handle of the person whose agent is sending
+  senderId        String?   // Resolved user ID
+  recipientHandle String    // @handle of the person being queried
+  recipientId     String    // Resolved user ID (must exist)
+  widgetSlug      String?   // Which widget context ("dating", "scheduling", etc.)
+  direction       String    // "query" or "response"
+  parentMessageId String?   // For responses: points to the query message
+  content         String    // The actual message text
+  metadata        Json?     // Structured data (intent, context)
+  status          String    @default("PENDING") // PENDING, DELIVERED, EXPIRED
+  deliveredAt     DateTime?
+  expiresAt       DateTime  // TTL: queries expire after 24h
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  parentMessage   RelayMessage?  @relation("RelayThread", fields: [parentMessageId], references: [id])
+  childMessages   RelayMessage[] @relation("RelayThread")
+
+  @@index([recipientHandle, status])
+  @@index([senderHandle])
+  @@index([conversationId])
+  @@index([parentMessageId])
+  @@index([expiresAt])
+}
+
+// ─── Bolo Core: Grants (the permission primitive) ───────────────────────────
+
+model Grant {
+  id            String    @id @default(cuid())
+  grantorId     String    // User giving access
+  granteeHandle String    // @handle receiving access (may not be registered yet)
+  granteeId     String?   // Resolved user ID (null if grantee hasn't signed up)
+  widget        String    // "calendar", "files", "messages", etc.
+  scopes        String[]  // ["free_busy", "events:read", "events:create"]
+  note          String?   // Optional note: "My assistant"
+  expiresAt     DateTime?
+  revokedAt     DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  grantor       User      @relation("GrantsGiven", fields: [grantorId], references: [id], onDelete: Cascade)
+  grantee       User?     @relation("GrantsReceived", fields: [granteeId], references: [id])
+
+  @@unique([grantorId, granteeHandle, widget])
+  @@index([grantorId])
+  @@index([granteeHandle])
+  @@index([granteeId])
+  @@index([widget])
+}
+
+model GrantRequest {
+  id              String    @id @default(cuid())
+  requestorHandle String    // @handle requesting access
+  requestorId     String?   // Resolved user ID (if registered)
+  targetHandle    String    // @handle being asked
+  targetId        String    // Resolved target user ID
+  widget          String    // Widget being requested
+  scopes          String[]  // Scopes being requested
+  reason          String?   // "I'd like to schedule meetings with you"
+  agentName       String?   // "OpenClaw", "Claude", etc.
+  status          String    @default("PENDING") // PENDING, APPROVED, DECLINED, EXPIRED
+  expiresAt       DateTime
+  respondedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([targetId, status])
+  @@index([requestorHandle])
+  @@index([targetHandle])
+}
+
+model EmailAuthToken {
+  id        String    @id @default(cuid())
+  email     String
+  code      String    // SHA-256 hashed OTP or magic link token
+  type      String    // "otp" or "magic_link"
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([email])
+  @@index([code])
+  @@index([expiresAt])
+}
+
+enum CalendarProvider {
+  GOOGLE
+  MICROSOFT
+  APPLE
+  CALENDLY
+  CALCOM
+}
+
+enum ConnectionType {
+  OAUTH
+  LINK
+  CALDAV
+}
+
+enum VerificationProvider {
+  IDME
+  JUMIO
+  ONFIDO
+  PERSONA
+  CLEAR
+  INTERNAL
+}
+
+enum VerificationLevel {
+  BASIC
+  VERIFIED
+  ENTERPRISE
+}
+
+// ─── Usage Tracking for Monetization ────────────────────────────────────────
+
+model UsageRecord {
+  id        String   @id @default(cuid())
+  userId    String
+  metric    String   // "relay_send", "relay_reply", "booking", "api_call"
+  count     Int      @default(1)
+  period    String   // "2026-03" (year-month)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, metric, period])
+  @@index([userId, period])
+}

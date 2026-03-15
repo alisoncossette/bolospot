@@ -1,0 +1,36 @@
+{
+  "name": "bolo-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for building on Bolo — sovereign infrastructure for AI agent coordination",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "bolo",
+    "sdk",
+    "permissions",
+    "trust",
+    "sovereign-infrastructure",
+    "ai-agents",
+    "relay",
+    "widgets"
+  ],
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
