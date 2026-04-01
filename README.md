@@ -19,13 +19,15 @@
 
 Everyone is building agents. Nobody is building for the **people those agents work for**.
 
-Right now, AI is happening *to* you. Agents are negotiating on your behalf, accessing your data, acting in your name — and you have no say. The infrastructure doesn't exist yet for a normal person to manage any of it.
+The agentic economy is here. Commercial agents are booking your appointments. Personal agents are scheduling your life. AI is acting in your name every day — whether you chose it or not.
+
+But there's no infrastructure for a normal person to participate in that confidently. No address. No way to say "yes, this agent can reach me" or "no, that one can't." No way to revoke it when things change.
 
 Bolospot is that infrastructure. And it doesn't require a PhD to use.
 
-**It's a toggle.** Your doctor can see your availability. Your accountant can't. Your ex? One tap — gone.
+**It's a toggle.** Your doctor can see your availability. Your accountant can't. A commercial scheduling agent can book you — but only within the rules you set. Your ex? One tap — gone.
 
-The agentic economy only works if people trust it. People only trust it if they're in control. **Bolospot is the control layer.** And no one else is building it for consumers.
+This isn't about fear. It's about empowerment. The agentic economy only reaches its potential when consumers can actually participate in it — on their own terms. **Bolospot makes that possible.** And no one else is building it for consumers.
 
 ---
 
