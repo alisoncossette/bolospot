@@ -17,17 +17,19 @@
 
 ## The problem nobody is solving
 
-Everyone is building agents. Nobody is building for the **people those agents work for**.
+You're already living in the agentic economy. You just don't have a coherent layer to manage it.
 
-The agentic economy is here. Commercial agents are booking your appointments. Personal agents are scheduling your life. AI is acting in your name every day — whether you chose it or not.
+You've connected Claude to your calendar. Given Marble access to your email. Authorized Notion, Zapier, half a dozen scheduling tools. You've approved things you've forgotten about, revoked nothing, and have no single place to see who has access to what. The permissions are scattered across every app you've ever touched.
 
-But there's no infrastructure for a normal person to participate in that confidently. No address. No way to say "yes, this agent can reach me" or "no, that one can't." No way to revoke it when things change.
+Nobody is building the layer that ties it together — for consumers. Not for developers. Not for enterprises. **For normal people.**
 
-Bolospot is that infrastructure. And it doesn't require a PhD to use.
+Bolospot is that layer. And it doesn't require a PhD to use.
 
 **It's a toggle.** Your doctor can see your availability. Your accountant can't. A commercial scheduling agent can book you — but only within the rules you set. Your ex? One tap — gone.
 
-This isn't about fear. It's about empowerment. The agentic economy only reaches its potential when consumers can actually participate in it — on their own terms. **Bolospot makes that possible.** And no one else is building it for consumers.
+A widget is anything that wants access to you. A bolo is your answer.
+
+The agentic economy only reaches its potential when people can actually participate in it — on their own terms, with full visibility, and a clean way out. **Bolospot makes that possible.** And no one else is building it for consumers.
 
 ---
 
