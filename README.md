@@ -33,20 +33,20 @@ This isn't about fear. It's about empowerment. The agentic economy only reaches 
 
 ## How it works
 
-You get a handle. `@alice`. That's your address in the agentic economy — permanent, not tied to any app or platform.
+You get a handle. `@alice`. That's your address — permanent, not tied to any app or platform.
 
-Everything that wants to reach you, access your data, or act on your behalf has to ask. You decide who gets what. Agents enforce it automatically. You can revoke anything, anytime, instantly.
+Anything that wants to reach you, access your data, or act on your behalf has to ask. You approve or deny. You can revoke anytime, instantly.
 
 ```
 Your PT office wants your insurance info.
 They ask. You tap approve.
 Your insurance auto-populates. You never dug for a card.
 
-Six months later: "Revoke."
-Data disappears. Instantly. No calls. No emails. Just gone.
+Six months later, you switch providers.
+One tap. Access gone. No calls. No emails. Just done.
 ```
 
-That's a **bolo** — the atomic unit of trust. A request that becomes a grant that can be revoked. Peer-to-peer. No intermediary. No admin. No platform in the middle.
+No intermediary. No admin. No platform in the middle.
 
 ---
 
@@ -82,20 +82,18 @@ Bolospot is the permission layer that makes the agentic economy safe for normal 
 
 ---
 
-## Widgets — the requesters
+## Who can request access
 
-A widget is anything that wants access to you. It could be a healthcare app, a scheduling service, a calendar, a recruiting platform, an AI agent acting on someone else's behalf. It registers itself with the protocol so you know who's knocking. You decide whether to answer — and what they get when you do.
+Anything can request access to you — a healthcare app, a scheduling service, a calendar, a recruiting platform, an AI agent. It registers with the protocol so you know who's asking. You decide what they get.
 
-The bolo is the permission. The widget is the requester. You hold the key.
-
-| | Widget | What it's asking for |
+| | Requester | What they're asking for |
 |---|--------|-------------|
 | 🩺 | **[BoMed](https://world.bomed.ai)** | Your PT office wants to book you and auto-fill your insurance |
 | 📅 | **Calendar** | A scheduling service wants to see your availability |
 | 💕 | **BoLove** | A dating agent wants to negotiate compatibility on your behalf |
 | 🧑‍💻 | **BoHire** | A recruiter wants to verify your credentials and schedule an interview |
 
-Any service, agent, or platform can register as a widget: `POST /api/widgets/register`
+Any service, agent, or platform can request access: `POST /api/widgets/register`
 
 ---
 
@@ -109,15 +107,14 @@ packages/
   bolo-sdk/       TypeScript SDK
 ```
 
-### Core primitives
+### Core concepts
 
-| Primitive | What it does |
+| | What it does |
 |-----------|---------|
-| **@handles** | Your permanent identity. One address for everything. |
-| **Bolos** | The trust object. Request → grant → revoke. |
-| **Widgets** | Apps that register their own permission types. |
-| **Relay** | Agent talks to agent. Only crafted responses cross the boundary. |
-| **Trust Graph** | Non-transitive. Real-time. No cached tokens. |
+| **@handle** | Your permanent address. One identity across every service and agent. |
+| **Permission grant** | You approve access. Scoped, real-time, instantly revocable. |
+| **Relay** | Your agent talks to their agent. Only what you allow crosses the boundary. |
+| **Trust graph** | Non-transitive. Checked on every request. No cached tokens. |
 
 ---
 
