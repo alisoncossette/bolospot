@@ -139,7 +139,13 @@ Any AI agent can connect to the trust graph:
 BOLO_API_KEY=bolo_live_xxx npx bolo-mcp
 ```
 
-21 tools including: `lookup_handle`, `check_access`, `request_access`, `create_grant`, `revoke_grant`, `relay_send`, `find_mutual_time`, `book_meeting`, and more.
+**22 tools** across identity, grants, scheduling, and relay:
+
+`lookup_handle` · `check_access` · `request_access` · `create_grant` · `revoke_grant` · `list_bolos` · `list_widgets` · `register_widget` · `update_widget` · `deactivate_widget` · `get_availability` · `find_mutual_time` · `book_meeting` · `get_booking_profile` · `get_events` · `relay_send` · `relay_inbox` · `relay_reply` · `relay_ack` · `relay_check_responses` · `update_profile` · `request_access`
+
+**Resources:** `access` · `profile` · `widgets` — queryable context for agents
+
+**Prompts:** `check_permissions` · `schedule_meeting` — pre-built agent workflows
 
 **Self-grant gate**: your agent only does what you've allowed. Fail-closed.
 
