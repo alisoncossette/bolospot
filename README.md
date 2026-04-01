@@ -6,15 +6,17 @@
 
 <p align="center">
   <strong>One handle. Total control.</strong><br/>
-  Don't let the human be the bottleneck in the agentic economy.
+  People set policy. Agents operate within it. Revoke anytime.
 </p>
 
 <p align="center">
-  <a href="https://bolospot.com">Website</a> &middot;
+  <a href="https://bolospot.com"><strong>bolospot.com</strong></a> &middot;
+  <a href="https://world.bomed.ai"><strong>world.bomed.ai</strong></a> &middot;
   <a href="https://www.npmjs.com/package/bolo-mcp">MCP Server</a> &middot;
-  <a href="https://bolo-api-650440848480.us-central1.run.app/api/docs">API Docs</a> &middot;
-  <a href="https://bomed.ai">BoMed</a>
+  <a href="https://bolo-api-650440848480.us-central1.run.app/api/docs">API Docs</a>
 </p>
+
+> Built for **PL Genesis 2026** — Web3 + Digital Human Rights track, with World ID integration.
 
 ---
 
@@ -25,10 +27,6 @@ AI agents are the biggest coordination problem since the internet. Every agent n
 Right now there are two options: **wide open** (dangerous) or **human in the loop** (doesn't scale).
 
 Bolo is the third option: **set your rules, agents operate within them, revoke anytime.** The human sets policy. The trust layer enforces it.
-
-This is **sovereign infrastructure** — no central authority controls the trust relationship between two peers. Permissions follow people, not platforms.
-
-> Built for [Funding the Commons SF 2026](https://fundingthecommons.io) — Sovereign Infrastructure track.
 
 ---
 
@@ -53,7 +51,18 @@ A **bolo** is the atomic trust object. It starts as a request, becomes a grant, 
 
 ---
 
-## The Commons Case
+## World ID Integration
+
+Bolospot uses **World ID** for verified human identity. When you claim your @handle, you prove you're a real person — not a bot, not a duplicate. Your grants carry that verification forward.
+
+- World ID verifies the human behind the handle
+- Grants are scoped to verified identities
+- Agents can check verification status before acting
+- Live demo: **[world.bomed.ai](https://world.bomed.ai)**
+
+---
+
+## The Protocol
 
 Traditional permission systems are **top-down**: an admin assigns roles, a platform controls access, an OAuth provider decides what scopes exist.
 
@@ -67,8 +76,6 @@ Bolo is **sideways**: two peers negotiate trust directly.
 | Revocation is slow | Instant. Checked every request. |
 | Transitive (leaked trust) | Non-transitive by design |
 
-**Sovereignty test**: if any single company, API, or cloud goes down — does the trust relationship survive? With Bolo, permissions follow people, not infrastructure.
-
 ---
 
 ## Widgets
@@ -78,10 +85,9 @@ Widgets are apps built on Bolospot — like apps on your phone, but each one onl
 | | Widget | What it does | Scopes |
 |---|--------|-------------|--------|
 | 📅 | **Calendar** | Scheduling & availability | `free_busy` `events:read` `events:create` |
-| 🩺 | **[BoMed](https://bomed.ai)** | Healthcare scheduling & insurance | `appointments:book` `patients:read` |
+| 🩺 | **[BoMed](https://world.bomed.ai)** | Healthcare scheduling & insurance | `appointments:book` `patients:read` |
 | 💕 | **BoLove** | Dating via agent relay | `date:initiate` `profile:share` |
 | 🧑‍💻 | **BoHire** | Recruiting & interviews | `interviews:schedule` `candidates:read` |
-| 🐞 | **Ladybug** | AI reading robot + voice | `voice:use` `voice:clone` |
 
 Register your own: `POST /api/widgets/register`
 
@@ -91,7 +97,7 @@ Register your own: `POST /api/widgets/register`
 
 ```
 apps/
-  api/            NestJS API — grants, scheduling, identity, relay, widgets
+  api/            NestJS API — grants, identity, scheduling, relay, widgets
   mcp-server/     MCP server — AI agents connect via Model Context Protocol
 packages/
   bolo-sdk/       TypeScript SDK for the Bolo API
@@ -121,20 +127,31 @@ npx bolo-mcp
 BOLO_API_KEY=bolo_live_xxx npx bolo-mcp
 ```
 
-**10 tools:**
+**Tools available:**
 
 | Tool | Description |
 |------|-------------|
 | `lookup_handle` | Find a user by @handle |
 | `check_access` | Check if a grant exists |
 | `request_access` | Send a bolo (request permissions) |
-| `list_widgets` | See all permission categories |
-| `get_availability` | Check someone's calendar |
-| `find_mutual_time` | Find overlapping free time |
-| `get_available_slots` | Get bookable slots |
+| `create_grant` | Grant access to a requester |
+| `revoke_grant` | Revoke an existing grant |
+| `list_bolos` | List all bolos (given + received) |
+| `list_widgets` | See all registered permission categories |
+| `register_widget` | Register a new widget type |
+| `update_widget` | Update widget metadata |
+| `deactivate_widget` | Deactivate a widget |
+| `get_availability` | Check someone's calendar availability |
+| `find_mutual_time` | Find overlapping free time between two handles |
 | `book_meeting` | Book a meeting |
-| `get_booking_profile` | Get booking preferences |
-| `check_booking_tier` | Check access level |
+| `get_booking_profile` | Get booking preferences for a handle |
+| `get_events` | Get calendar events |
+| `relay_send` | Send agent-to-agent message through trust boundary |
+| `relay_inbox` | Check relay inbox |
+| `relay_reply` | Reply to a relay message |
+| `relay_ack` | Acknowledge a relay message |
+| `relay_check_responses` | Check for relay responses |
+| `update_profile` | Update your profile |
 
 **Self-grant gate**: when `BOLO_SELF_GRANTS` is enabled, every tool call checks against the owner's permissions before executing. Your agent only does what you allow. Fail-closed.
 
@@ -177,15 +194,15 @@ Live Swagger docs: **[bolo-api/docs](https://bolo-api-650440848480.us-central1.r
 
 ```
 POST   /api/grants              Create a bolo (grant access)
-GET    /api/grants/given         Bolos you've given
-GET    /api/grants/received      Bolos you've received
-DELETE /api/grants/:id           Revoke a bolo
-GET    /api/grants/widgets       List all widget categories
-GET    /api/users/handle/:handle Look up a user
-GET    /api/availability/:handle Check availability
-POST   /api/meetings/book        Book a meeting
-POST   /api/widgets/register     Register a new widget
-POST   /api/relay/send           Send agent-to-agent message
+GET    /api/grants/given        Bolos you've given
+GET    /api/grants/received     Bolos you've received
+DELETE /api/grants/:id          Revoke a bolo
+GET    /api/users/handle/:handle  Look up a user by handle
+GET    /api/availability/:handle  Check availability
+POST   /api/meetings/book       Book a meeting
+POST   /api/widgets/register    Register a new widget
+POST   /api/relay/send          Send agent-to-agent message
+GET    /api/relay/inbox         Check relay inbox
 ```
 
 ---
@@ -200,7 +217,7 @@ POST   /api/relay/send           Send agent-to-agent message
 
 **Policy, not approval.** Set your rules once. Agents operate within them. The human is the policy maker, not the bottleneck.
 
-**Open protocol.** Any developer can register widgets, build clients, extend the trust layer. This is commons infrastructure.
+**Open protocol.** Any developer can register widgets, build clients, extend the trust layer.
 
 ---
 
@@ -209,9 +226,6 @@ POST   /api/relay/send           Send agent-to-agent message
 </p>
 
 <p align="center">
-  <a href="https://bolospot.com">Claim yours at bolospot.com</a>
-</p>
-
-<p align="center">
-  <sub>Built for <a href="https://fundingthecommons.io">Funding the Commons SF 2026</a> — Sovereign Infrastructure</sub>
+  <a href="https://bolospot.com"><strong>Claim yours at bolospot.com</strong></a> &middot;
+  <a href="https://world.bomed.ai"><strong>See it live at world.bomed.ai</strong></a>
 </p>
