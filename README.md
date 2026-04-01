@@ -82,18 +82,20 @@ Bolospot is the permission layer that makes the agentic economy safe for normal 
 
 ---
 
-## Widgets — the ecosystem
+## Widgets — the requesters
 
-Anyone can build on Bolospot. A widget is just an app that plays by the rules — it registers its permission types, users grant access, the protocol enforces it.
+A widget is anything that wants access to you. It could be a healthcare app, a scheduling service, a calendar, a recruiting platform, an AI agent acting on someone else's behalf. It registers itself with the protocol so you know who's knocking. You decide whether to answer — and what they get when you do.
 
-| | Widget | What it does |
+The bolo is the permission. The widget is the requester. You hold the key.
+
+| | Widget | What it's asking for |
 |---|--------|-------------|
-| 🩺 | **[BoMed](https://world.bomed.ai)** | Healthcare scheduling — your PT books you, insurance auto-populates |
-| 📅 | **Calendar** | Scheduling & availability |
-| 💕 | **BoLove** | Dating via agent relay — only your agent talks to their agent |
-| 🧑‍💻 | **BoHire** | Recruiting — verified candidates, no more resume spam |
+| 🩺 | **[BoMed](https://world.bomed.ai)** | Your PT office wants to book you and auto-fill your insurance |
+| 📅 | **Calendar** | A scheduling service wants to see your availability |
+| 💕 | **BoLove** | A dating agent wants to negotiate compatibility on your behalf |
+| 🧑‍💻 | **BoHire** | A recruiter wants to verify your credentials and schedule an interview |
 
-Build your own: `POST /api/widgets/register`
+Any service, agent, or platform can register as a widget: `POST /api/widgets/register`
 
 ---
 
