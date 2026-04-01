@@ -29,6 +29,8 @@ Bolospot is that layer. And it doesn't require a PhD to use.
 
 A widget is anything that wants access to you. A bolo is your answer.
 
+Sovereignty is impossible without management. Bolospot is the management layer.
+
 The agentic economy only reaches its potential when people can actually participate in it — on their own terms, with full visibility, and a clean way out. **Bolospot makes that possible.** And no one else is building it for consumers.
 
 ---
