@@ -52,6 +52,15 @@ One tap. Access gone. No calls. No emails. Just done.
 
 No intermediary. No admin. No platform in the middle.
 
+
+<p align="center">
+  <img src="docs/screenshots/screen-home.png" width="220" alt="Home" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/screen-grants.png" width="220" alt="Grants" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/screen-bomed.png" width="220" alt="BoMed" />
+</p>
+
 ---
 
 ## World ID integration
