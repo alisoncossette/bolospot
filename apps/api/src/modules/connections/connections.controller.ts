@@ -15,6 +15,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery }
 import { ConfigService } from '@nestjs/config';
 import { ConnectionsService } from './connections.service';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
+import { ToggleSelectedDto, ToggleBusyBlockDto } from './dto/connections.dto';
 import { Request as ExpressRequest } from 'express';
 
 interface AuthenticatedRequest extends ExpressRequest {
@@ -97,7 +98,7 @@ export class ConnectionsController {
   async toggleSelected(
     @Request() req: AuthenticatedRequest,
     @Param('calendarId') calendarId: string,
-    @Body() body: { isSelected: boolean },
+    @Body() body: ToggleSelectedDto,
   ) {
     return this.connectionsService.toggleSelected(req.user.id, calendarId, body.isSelected);
   }
@@ -112,7 +113,7 @@ export class ConnectionsController {
   async toggleBusyBlock(
     @Request() req: AuthenticatedRequest,
     @Param('calendarId') calendarId: string,
-    @Body() body: { isBusyBlock: boolean },
+    @Body() body: ToggleBusyBlockDto,
   ) {
     return this.connectionsService.toggleBusyBlock(req.user.id, calendarId, body.isBusyBlock);
   }
@@ -122,9 +123,10 @@ export class ConnectionsController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Start Google OAuth', description: 'Get Google OAuth authorization URL' })
   @ApiResponse({ status: 200, description: 'Returns authorization URL' })
-  async googleAuthorize(@Request() req: AuthenticatedRequest) {
+  @ApiQuery({ name: 'returnUrl', required: false, description: 'URL to redirect to after OAuth completes (e.g. for BoMed or other apps)' })
+  async googleAuthorize(@Request() req: AuthenticatedRequest, @Query('returnUrl') returnUrl?: string) {
     const redirectUri = `${this.configService.get('API_URL')}/api/connections/google/callback`;
-    return this.connectionsService.getGoogleAuthUrl(req.user.id, redirectUri);
+    return this.connectionsService.getGoogleAuthUrl(req.user.id, redirectUri, returnUrl);
   }
 
   @Get('google/callback')
@@ -140,7 +142,7 @@ export class ConnectionsController {
     const redirectUri = `${this.configService.get('API_URL')}/api/connections/google/callback`;
     const connection = await this.connectionsService.handleGoogleCallback(code, redirectUri, state);
 
-    const { userId } = JSON.parse(Buffer.from(state, 'base64').toString());
+    const { userId, returnUrl } = JSON.parse(Buffer.from(state, 'base64').toString());
 
     // Sync calendar and update pending invitations in background
     this.connectionsService.syncConnection(userId, connection.id).catch((err) => {
@@ -152,7 +154,21 @@ export class ConnectionsController {
       console.error('Failed to update pending invitations:', err);
     });
 
+    // If a returnUrl was specified (e.g. BoMed), redirect there with success param
+    if (returnUrl) {
+      const url = new URL(returnUrl);
+      url.searchParams.set('calendar', 'connected');
+      return { url: url.toString() };
+    }
+
+    // Check if user needs onboarding - if so, redirect to onboarding instead
+    const user = await this.connectionsService.getUserById(userId);
     const frontendUrl = this.configService.get('FRONTEND_URL');
+
+    if (user?.needsOnboarding) {
+      return { url: `${frontendUrl}/onboarding?connected=google` };
+    }
+
     return { url: `${frontendUrl}/dashboard/connections?success=google` };
   }
 
@@ -191,7 +207,14 @@ export class ConnectionsController {
       console.error('Failed to update pending invitations:', err);
     });
 
+    // Check if user needs onboarding - if so, redirect to onboarding instead
+    const user = await this.connectionsService.getUserById(userId);
     const frontendUrl = this.configService.get('FRONTEND_URL');
+
+    if (user?.needsOnboarding) {
+      return { url: `${frontendUrl}/onboarding?connected=microsoft` };
+    }
+
     return { url: `${frontendUrl}/dashboard/connections?success=microsoft` };
   }
 }

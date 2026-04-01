@@ -25,11 +25,17 @@ model User {
   verificationLevel    String                @default("BASIC")
   isHumanVerified      Boolean               @default(false)
   verifiedAt           DateTime?
+  isWorldIdVerified    Boolean               @default(false)
+  worldIdNullifier     String?               @unique  // World ID nullifier hash (unique per human)
+  worldIdVerifiedAt    DateTime?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
   autoApproveMeetings  Boolean               @default(false)
   busyBlockSyncMinutes Int                   @default(60)
   busyBlockTitle       String                @default("Busy (Bolo)")
+  defaultAccessAny     String                @default("request")      // none | request | busy
+  defaultAccessVerified String               @default("busy_request") // request | busy_request | full
+  defaultAccessTrusted String                @default("full_book")    // busy_request | full_book
   lastBusyBlockSyncAt  DateTime?
   plan                 String                @default("FREE") // FREE, PRO, BUILDER
   stripeCustomerId     String?               @unique
@@ -64,6 +70,8 @@ model ApiKey {
   name        String
   keyHash     String    @unique
   keyPrefix   String
+  keyType     String    @default("personal") // "personal" or "widget"
+  widgetSlug  String?   // Only for widget keys — links to registered widget
   permissions String[]  @default(["availability:read"])
   lastUsedAt  DateTime?
   usageCount  Int       @default(0)
@@ -77,6 +85,7 @@ model ApiKey {
   @@index([userId])
   @@index([keyHash])
   @@index([keyPrefix])
+  @@index([keyType])
 }
 
 model UserEmail {
@@ -644,7 +653,8 @@ model RelayMessage {
 model Grant {
   id            String    @id @default(cuid())
   grantorId     String    // User giving access
-  granteeHandle String    // @handle receiving access (may not be registered yet)
+  granteeHandle String?   // @handle receiving access (null if granted by email before signup)
+  granteeEmail  String?   // Email receiving access (used for pending invites)
   granteeId     String?   // Resolved user ID (null if grantee hasn't signed up)
   widget        String    // "calendar", "files", "messages", etc.
   scopes        String[]  // ["free_busy", "events:read", "events:create"]
@@ -659,8 +669,10 @@ model Grant {
   grantee       User?     @relation("GrantsReceived", fields: [granteeId], references: [id])
 
   @@unique([grantorId, granteeHandle, widget])
+  @@unique([grantorId, granteeEmail, widget])
   @@index([grantorId])
   @@index([granteeHandle])
+  @@index([granteeEmail])
   @@index([granteeId])
   @@index([widget])
 }
@@ -721,6 +733,7 @@ enum VerificationProvider {
   PERSONA
   CLEAR
   INTERNAL
+  WORLD_ID
 }
 
 enum VerificationLevel {

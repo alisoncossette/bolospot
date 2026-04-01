@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FirebaseAdminProvider } from '../../providers/firebase/firebase-admin.provider';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class IdentityVerificationService {
@@ -9,6 +10,7 @@ export class IdentityVerificationService {
   constructor(
     private prisma: PrismaService,
     private firebaseAdmin: FirebaseAdminProvider,
+    private configService: ConfigService,
   ) {}
 
   async verifyPhoneWithFirebase(userId: string, firebaseIdToken: string) {
@@ -172,6 +174,133 @@ export class IdentityVerificationService {
     }
 
     return normalized;
+  }
+
+  async verifyWithWorldId(
+    userId: string,
+    payload: {
+      merkle_root: string;
+      nullifier_hash: string;
+      proof: string;
+      verification_level: string;
+    },
+    action: string,
+  ) {
+    const appId = this.configService.get<string>('WORLD_APP_ID');
+    if (!appId) {
+      throw new BadRequestException('World ID is not configured');
+    }
+
+    // Verify the proof with World ID cloud API
+    const verifyRes = await fetch(
+      `https://developer.worldcoin.org/api/v1/verify/${appId}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nullifier_hash: payload.nullifier_hash,
+          merkle_root: payload.merkle_root,
+          proof: payload.proof,
+          verification_level: payload.verification_level,
+          action,
+          signal: userId, // Bind proof to this specific user
+        }),
+      },
+    );
+
+    if (!verifyRes.ok) {
+      const err = await verifyRes.json().catch(() => ({}));
+      this.logger.warn(`World ID verification failed for user ${userId}: ${JSON.stringify(err)}`);
+      throw new BadRequestException('World ID verification failed. Please try again.');
+    }
+
+    const verifyData = await verifyRes.json();
+
+    // Check nullifier isn't already claimed by another user
+    const existingUser = await this.prisma.user.findFirst({
+      where: {
+        worldIdNullifier: payload.nullifier_hash,
+        id: { not: userId },
+      },
+    });
+
+    if (existingUser) {
+      throw new BadRequestException(
+        'This World ID is already linked to another account.',
+      );
+    }
+
+    // Get or create WORLD_ID identity type
+    const worldIdType = await this.prisma.identityType.upsert({
+      where: { code: 'WORLD_ID' },
+      update: {},
+      create: {
+        code: 'WORLD_ID',
+        name: 'World ID',
+        icon: 'world-id',
+        isActive: true,
+        sortOrder: 5,
+      },
+    });
+
+    // Store the identity
+    const identity = await this.prisma.userIdentity.upsert({
+      where: {
+        identityTypeId_value: {
+          identityTypeId: worldIdType.id,
+          value: payload.nullifier_hash,
+        },
+      },
+      update: {
+        isVerified: true,
+        verifiedAt: new Date(),
+        metadata: {
+          verification_level: payload.verification_level,
+          merkle_root: payload.merkle_root,
+        },
+      },
+      create: {
+        userId,
+        identityTypeId: worldIdType.id,
+        value: payload.nullifier_hash,
+        displayValue: 'World ID Verified',
+        isVerified: true,
+        verifiedAt: new Date(),
+        visibility: 'BOLO_ONLY',
+        metadata: {
+          verification_level: payload.verification_level,
+          merkle_root: payload.merkle_root,
+        },
+      },
+      include: { identityType: true },
+    });
+
+    // Mark user as World ID verified
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        isWorldIdVerified: true,
+        worldIdNullifier: payload.nullifier_hash,
+        worldIdVerifiedAt: new Date(),
+        isHumanVerified: true,
+        verificationLevel: 'VERIFIED',
+      },
+    });
+
+    this.logger.log(`World ID verified for user ${userId}`);
+
+    return {
+      success: true,
+      identity: {
+        id: identity.id,
+        type: 'WORLD_ID',
+        typeName: 'World ID',
+        value: 'World ID Verified',
+        isVerified: true,
+        verifiedAt: identity.verifiedAt,
+        verificationLevel: payload.verification_level,
+      },
+    };
   }
 
   isPhoneVerificationAvailable(): boolean {

@@ -16,6 +16,7 @@ import { ApiKeysService } from '../api-keys/api-keys.service';
 import { GrantsService } from '../grants/grants.service';
 import { ConnectionsService } from '../connections/connections.service';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
+import { DualAuthGuard } from '../auth/guards/dual-auth.guard';
 
 @ApiTags('availability')
 @Controller('availability')
@@ -74,6 +75,85 @@ export class AvailabilityController {
       handle,
       new Date(startDate),
       new Date(endDate),
+      timezone,
+    );
+  }
+
+  @Get('mutual')
+  @UseGuards(DualAuthGuard)
+  @ApiOperation({
+    summary: 'Find mutual availability',
+    description: 'Find overlapping free time across multiple users. Accepts session auth (web) or API key auth (MCP). API key requires grants; session auth does not.',
+  })
+  @ApiQuery({ name: 'handles', required: true, description: 'Comma-separated list of handles' })
+  @ApiQuery({ name: 'startDate', required: true, description: 'Start date (ISO 8601)' })
+  @ApiQuery({ name: 'endDate', required: true, description: 'End date (ISO 8601)' })
+  @ApiQuery({ name: 'duration', required: true, description: 'Meeting duration in minutes' })
+  @ApiQuery({ name: 'timezone', required: false, description: 'Timezone (default: UTC)' })
+  @ApiResponse({ status: 200, description: 'Mutual availability slots returned' })
+  @ApiResponse({ status: 403, description: 'Forbidden - missing auth or grants' })
+  async findMutualAvailability(
+    @Request() req: any,
+    @Query('handles') handles: string,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('duration') duration: string,
+    @Query('timezone') timezone: string = 'UTC',
+  ) {
+    const handleList = handles.split(',').map((h) => h.trim());
+    let myHandle: string;
+    let userId: string;
+
+    if (req.user?.id) {
+      // Session auth (web dashboard)
+      myHandle = req.user.handle;
+      userId = req.user.id;
+      if (!myHandle) {
+        throw new ForbiddenException('Your account does not have a @handle.');
+      }
+    } else if (req.apiKey) {
+      // API key auth (MCP)
+      if (!this.apiKeysService.hasPermission(req.apiKey.permissions, 'availability:read')) {
+        throw new ForbiddenException('API key does not have availability:read permission');
+      }
+      if (!req.apiKeyUser?.handle) {
+        throw new ForbiddenException('API key must belong to a user with a @handle.');
+      }
+      myHandle = req.apiKeyUser.handle;
+      userId = req.apiKeyUser.id;
+
+      // API key path requires grants from every handle
+      const denied: string[] = [];
+      for (const h of handleList) {
+        const hasGrant = await this.grantsService.hasAccess(myHandle, h, 'calendar', 'free_busy');
+        if (!hasGrant) denied.push(h);
+      }
+      if (denied.length > 0) {
+        throw new ForbiddenException(
+          `Missing calendar:free_busy grant from: ${denied.map((h) => `@${h}`).join(', ')}. Request access first.`,
+        );
+      }
+    } else {
+      throw new ForbiddenException('Authentication required (session or API key).');
+    }
+
+    const hasCalendar = await this.connectionsService.hasConnectedCalendar(userId);
+    if (!hasCalendar) {
+      throw new ForbiddenException(
+        'You must connect at least one calendar. Visit https://bolospot.com/dashboard/connections',
+      );
+    }
+
+    // Include the requesting user in the list
+    if (!handleList.includes(myHandle)) {
+      handleList.unshift(myHandle);
+    }
+
+    return this.availabilityService.findMutualAvailability(
+      handleList,
+      new Date(startDate),
+      new Date(endDate),
+      parseInt(duration, 10),
       timezone,
     );
   }
@@ -138,76 +218,6 @@ export class AvailabilityController {
       handle,
       new Date(startDate),
       new Date(endDate),
-      timezone,
-    );
-  }
-
-  @Get('mutual')
-  @UseGuards(ApiKeyGuard, ApiKeyThrottleGuard)
-  @RateLimit(20, 60) // 20 requests per minute (heavier endpoint)
-  @ApiSecurity('api-key')
-  @ApiOperation({
-    summary: 'Find mutual availability',
-    description: 'Find overlapping free time across multiple users. Requires grants from ALL targets.',
-  })
-  @ApiQuery({ name: 'handles', required: true, description: 'Comma-separated list of handles' })
-  @ApiQuery({ name: 'startDate', required: true, description: 'Start date (ISO 8601)' })
-  @ApiQuery({ name: 'endDate', required: true, description: 'End date (ISO 8601)' })
-  @ApiQuery({ name: 'duration', required: true, description: 'Meeting duration in minutes' })
-  @ApiQuery({ name: 'timezone', required: false, description: 'Timezone (default: UTC)' })
-  @ApiResponse({ status: 200, description: 'Mutual availability slots returned' })
-  @ApiResponse({ status: 403, description: 'Forbidden - missing grant from one or more targets' })
-  async findMutualAvailability(
-    @Request() req: any,
-    @Query('handles') handles: string,
-    @Query('startDate') startDate: string,
-    @Query('endDate') endDate: string,
-    @Query('duration') duration: string,
-    @Query('timezone') timezone: string = 'UTC',
-  ) {
-    if (!this.apiKeysService.hasPermission(req.apiKey.permissions, 'availability:read')) {
-      throw new ForbiddenException('API key does not have availability:read permission');
-    }
-
-    if (!req.apiKeyUser?.handle) {
-      throw new ForbiddenException('API key must belong to a user with a @handle.');
-    }
-
-    // MANDATORY: Requestor must have at least one connected calendar
-    const hasCalendar = await this.connectionsService.hasConnectedCalendar(req.apiKeyUser.id);
-    if (!hasCalendar) {
-      throw new ForbiddenException(
-        'You must connect at least one calendar to use the availability API. ' +
-        'Visit https://bolospot.com/dashboard/connections to connect Google or Microsoft.',
-      );
-    }
-
-    // Check grants for EVERY handle in the list
-    const handleList = handles.split(',').map((h) => h.trim());
-    const denied: string[] = [];
-
-    for (const h of handleList) {
-      const hasGrant = await this.grantsService.hasAccess(
-        req.apiKeyUser.handle,
-        h,
-        'calendar',
-        'free_busy',
-      );
-      if (!hasGrant) denied.push(h);
-    }
-
-    if (denied.length > 0) {
-      throw new ForbiddenException(
-        `Missing calendar:free_busy grant from: ${denied.map((h) => `@${h}`).join(', ')}. ` +
-        `Request access first.`,
-      );
-    }
-
-    return this.availabilityService.findMutualAvailability(
-      handleList,
-      new Date(startDate),
-      new Date(endDate),
-      parseInt(duration, 10),
       timezone,
     );
   }

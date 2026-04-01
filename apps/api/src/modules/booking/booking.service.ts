@@ -89,9 +89,8 @@ export class BookingService {
             durations: profile.durations,
             bufferBefore: profile.bufferBefore,
             bufferAfter: profile.bufferAfter,
-            connectionId: profile.connectionId,
-            connectionEmail: profile.connection?.accountEmail || null,
-            connectionProvider: profile.connection?.provider || null,
+            isConnected: !!profile.connectionId,
+            connectionId: profile.connectionId || undefined,
           }
         : null,
     };
@@ -133,9 +132,7 @@ export class BookingService {
         name: p.name,
         description: p.description,
         durations: p.durations,
-        connectionId: p.connectionId,
-        connectionEmail: p.connection?.accountEmail || null,
-        connectionProvider: p.connection?.provider || null,
+        isConnected: !!p.connectionId,
       })),
     };
   }
@@ -370,7 +367,7 @@ export class BookingService {
         workingDays,
         bufferBefore: profile.bufferBefore,
         bufferAfter: profile.bufferAfter,
-        slotIncrement: 15,
+        slotIncrement: duration >= 30 ? 30 : 15,
         limit: 100,
         minParticipants: 1,
       },
@@ -448,6 +445,16 @@ export class BookingService {
       throw new BadRequestException('Booking is not available for this user');
     }
 
+    // Ensure name and email are present (auto-filled by controller for API key users)
+    if (!dto.email) {
+      throw new BadRequestException('Email is required for booking');
+    }
+    if (!dto.name) {
+      throw new BadRequestException('Name is required for booking');
+    }
+    const bookerEmail: string = dto.email;
+    const bookerName: string = dto.name;
+
     // Validate duration
     if (!profile.durations.includes(dto.duration)) {
       throw new BadRequestException(
@@ -509,7 +516,7 @@ export class BookingService {
     // Build participant list: email-only attendees
     const additionalEmails = (dto.additionalAttendees || [])
       .map((e) => e.trim().toLowerCase())
-      .filter((e) => e && e !== dto.email.toLowerCase() && e !== user.email.toLowerCase());
+      .filter((e) => e && e !== bookerEmail.toLowerCase() && e !== user.email.toLowerCase());
 
     // Resolve additional Bolo handles
     const additionalHandleUsers: Array<{
@@ -578,7 +585,7 @@ export class BookingService {
     const allUniqueEmails = [...new Set([
       ...additionalEmails,
       ...allHandleEmails,
-    ])].filter(e => e !== dto.email.toLowerCase() && e !== user.email.toLowerCase());
+    ])].filter(e => e !== bookerEmail.toLowerCase() && e !== user.email.toLowerCase());
 
     const participantCreates = [
       {
@@ -591,8 +598,8 @@ export class BookingService {
         invitationStatus: 'APPROVED' as const,
       },
       {
-        email: dto.email,
-        name: dto.name,
+        email: bookerEmail,
+        name: bookerName,
         role: 'INVITEE' as const,
         responseStatus: 'RESPONDED' as const,
         respondedAt: new Date(),
@@ -622,8 +629,8 @@ export class BookingService {
     // Meeting title
     const handleNames = additionalHandleUsers.map(u => u.name || `@${u.handle}`);
     const title = handleNames.length > 0
-      ? `Meeting with ${dto.name}, ${handleNames.join(', ')}`
-      : `Meeting with ${dto.name}`;
+      ? `Meeting with ${bookerName}, ${handleNames.join(', ')}`
+      : `Meeting with ${bookerName}`;
 
     // Create the meeting request — PENDING if approval required, CONFIRMED if direct
     const isPending = bookingTier === 'approval';
@@ -660,7 +667,7 @@ export class BookingService {
     if (!isPending) {
       // ─── DIRECT BOOKING: create calendar events + send confirmation emails ───
 
-      const allAttendeeEmails = [dto.email, ...allUniqueEmails];
+      const allAttendeeEmails = [bookerEmail, ...allUniqueEmails];
 
       // Use the profile's specific connection, or fall back to first
       const connection = profile.connectionId
@@ -691,8 +698,8 @@ export class BookingService {
       }
 
       // Escape user-controlled values for HTML emails
-      const safeName = escapeHtml(dto.name);
-      const safeEmail = escapeHtml(dto.email);
+      const safeName = escapeHtml(bookerName);
+      const safeEmail = escapeHtml(bookerEmail);
       const safeNotes = dto.notes ? escapeHtml(dto.notes) : '';
       const safeHostName = escapeHtml(user.name || user.handle);
       const safeHostHandle = escapeHtml(user.handle);
@@ -700,7 +707,7 @@ export class BookingService {
 
       // Confirmation email to visitor
       await this.emailService.sendEmail({
-        to: dto.email,
+        to: bookerEmail,
         subject: `Meeting confirmed with ${user.name || user.handle}${handleLabel}`,
         html: `
           <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
@@ -723,7 +730,7 @@ export class BookingService {
       // Confirmation email to host
       await this.emailService.sendEmail({
         to: user.email,
-        subject: `New booking: ${dto.name} booked a meeting`,
+        subject: `New booking: ${bookerName} booked a meeting`,
         html: `
           <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #0ea5e9;">New Meeting Booked</h2>
@@ -748,7 +755,7 @@ export class BookingService {
         const safeAddName = escapeHtml(addUser.name || addUser.handle);
         await this.emailService.sendEmail({
           to: addUser.email,
-          subject: `You've been added to a meeting with ${dto.name}`,
+          subject: `You've been added to a meeting with ${bookerName}`,
           html: `
             <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #0ea5e9;">New Meeting</h2>
@@ -774,8 +781,8 @@ export class BookingService {
 
       const safeVisitorHandle = visitorHandle ? escapeHtml(visitorHandle) : '';
       const visitorLabel = safeVisitorHandle ? ` (@${safeVisitorHandle})` : '';
-      const safeName2 = escapeHtml(dto.name);
-      const safeEmail2 = escapeHtml(dto.email);
+      const safeName2 = escapeHtml(bookerName);
+      const safeEmail2 = escapeHtml(bookerEmail);
       const safeNotes2 = dto.notes ? escapeHtml(dto.notes) : '';
       const safeHostName2 = escapeHtml(user.name || user.handle);
       const safeHostHandle2 = escapeHtml(user.handle);
@@ -783,7 +790,7 @@ export class BookingService {
       // Request email to host
       await this.emailService.sendEmail({
         to: user.email,
-        subject: `Meeting request from ${dto.name}`,
+        subject: `Meeting request from ${bookerName}`,
         html: `
           <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #f59e0b;">Meeting Request</h2>
@@ -804,7 +811,7 @@ export class BookingService {
 
       // Pending confirmation email to visitor
       await this.emailService.sendEmail({
-        to: dto.email,
+        to: bookerEmail,
         subject: `Meeting request sent to ${user.name || user.handle}`,
         html: `
           <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
@@ -896,6 +903,104 @@ export class BookingService {
       this.logger.error(`Failed to create calendar event: ${err}`);
       return null;
     }
+  }
+
+  /**
+   * Update a user's first active booking profile.
+   * Used by MCP/API-key endpoints to manage booking settings.
+   */
+  async listOwnerProfiles(userId: string) {
+    const profiles = await this.prisma.bookingProfile.findMany({
+      where: { userId, isActive: true },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        connection: { select: { id: true, accountEmail: true, provider: true } },
+      },
+    });
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { handle: true },
+    });
+
+    return profiles.map((p) => ({
+      id: p.id,
+      slug: p.slug,
+      name: p.name,
+      description: p.description,
+      durations: p.durations,
+      bufferBefore: p.bufferBefore,
+      bufferAfter: p.bufferAfter,
+      visibility: p.visibility,
+      connectionEmail: p.connection?.accountEmail || null,
+      connectionProvider: p.connection?.provider || null,
+      bookingUrl: user ? `bolospot.com/b/${user.handle}/${p.slug}` : null,
+    }));
+  }
+
+  async updateBookingProfile(userId: string, data: {
+    durations?: number[];
+    bufferBefore?: number;
+    bufferAfter?: number;
+    name?: string;
+    description?: string;
+    slug?: string;
+    setDefault?: boolean;
+  }, profileId?: string) {
+    const profile = profileId
+      ? await this.prisma.bookingProfile.findFirst({ where: { id: profileId, userId, isActive: true } })
+      : await this.prisma.bookingProfile.findFirst({ where: { userId, isActive: true }, orderBy: { createdAt: 'asc' } });
+
+    if (!profile) {
+      throw new NotFoundException('No active booking profile found');
+    }
+
+    const updateData: Record<string, any> = {};
+    if (data.durations !== undefined) updateData.durations = data.durations;
+    if (data.bufferBefore !== undefined) updateData.bufferBefore = data.bufferBefore;
+    if (data.bufferAfter !== undefined) updateData.bufferAfter = data.bufferAfter;
+    if (data.name !== undefined) updateData.name = data.name;
+    if (data.description !== undefined) updateData.description = data.description;
+
+    // Make this the default doorstep calendar — set PUBLIC, demote all others to PRIVATE
+    if (data.setDefault) {
+      await this.prisma.bookingProfile.updateMany({
+        where: { userId, isActive: true, id: { not: profile.id } },
+        data: { visibility: 'PRIVATE' },
+      });
+      updateData.visibility = 'PUBLIC';
+    }
+
+    // Handle slug change with validation
+    if (data.slug !== undefined && data.slug !== profile.slug) {
+      const cleanSlug = data.slug.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 30);
+      if (!cleanSlug) {
+        throw new BadRequestException('Slug cannot be empty');
+      }
+      // Check uniqueness for this user
+      const existing = await this.prisma.bookingProfile.findUnique({
+        where: { userId_slug: { userId, slug: cleanSlug } },
+      });
+      if (existing && existing.id !== profile.id) {
+        throw new BadRequestException('That booking link is already in use');
+      }
+      updateData.slug = cleanSlug;
+    }
+
+    const updated = await this.prisma.bookingProfile.update({
+      where: { id: profile.id },
+      data: updateData,
+    });
+
+    return {
+      id: updated.id,
+      slug: updated.slug,
+      name: updated.name,
+      description: updated.description,
+      durations: updated.durations,
+      bufferBefore: updated.bufferBefore,
+      bufferAfter: updated.bufferAfter,
+    };
   }
 
   private generateShareCode(): string {

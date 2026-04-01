@@ -5,12 +5,17 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
+  ForbiddenException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery, ApiBody, ApiSecurity } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
+import { ApiKeyGuard } from '../api-keys/api-key.guard';
+import { ApiKeyThrottleGuard } from '../api-keys/api-key-throttle.guard';
+import { RateLimit } from '../api-keys/api-key-throttle.guard';
 import { Request as ExpressRequest } from 'express';
 
 interface AuthenticatedRequest extends ExpressRequest {
@@ -21,6 +26,19 @@ interface AuthenticatedRequest extends ExpressRequest {
 @Controller('users')
 export class UsersController {
   constructor(private usersService: UsersService) {}
+
+  @Get('search')
+  @UseGuards(SessionAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Search users', description: 'Search Bolo users by handle or email' })
+  @ApiQuery({ name: 'q', required: true, description: 'Search query (handle or email, min 2 chars)' })
+  @ApiResponse({ status: 200, description: 'Matching users returned' })
+  async searchUsers(
+    @Request() req: AuthenticatedRequest,
+    @Query('q') q: string,
+  ) {
+    return this.usersService.search(q, req.user.id);
+  }
 
   @Get('handle/:handle')
   @ApiOperation({ summary: 'Get user by handle', description: 'Look up a public user profile by their handle' })
@@ -76,6 +94,9 @@ export class UsersController {
       recordingPref?: string;
       busyBlockSyncMinutes?: number;
       busyBlockTitle?: string;
+      defaultAccessAny?: string;
+      defaultAccessVerified?: string;
+      defaultAccessTrusted?: string;
     },
   ) {
     return this.usersService.updateProfile(req.user.id, data);
@@ -109,5 +130,62 @@ export class UsersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getRecentActivity(@Request() req: AuthenticatedRequest) {
     return this.usersService.getRecentActivity(req.user.id);
+  }
+
+  // ─── API key endpoints (for MCP / agents) ──────────────────────────
+
+  @Get('profile/key')
+  @UseGuards(ApiKeyGuard, ApiKeyThrottleGuard)
+  @RateLimit(60, 60)
+  @ApiSecurity('api-key')
+  @ApiOperation({ summary: 'Get profile (API key)', description: 'Get your profile via API key identity.' })
+  @ApiResponse({ status: 200, description: 'Profile returned' })
+  async getProfileByKey(@Request() req: any) {
+    if (!req.apiKeyUser?.id) {
+      throw new ForbiddenException('API key must belong to a registered user');
+    }
+    const user = await this.usersService.findById(req.apiKeyUser.id);
+    return {
+      handle: user.handle,
+      name: user.name,
+      timezone: user.timezone,
+      workingHoursStart: user.workingHoursStart,
+      workingHoursEnd: user.workingHoursEnd,
+      workingDays: user.workingDays,
+    };
+  }
+
+  @Patch('profile/key')
+  @UseGuards(ApiKeyGuard, ApiKeyThrottleGuard)
+  @RateLimit(30, 60)
+  @ApiSecurity('api-key')
+  @ApiOperation({ summary: 'Update profile (API key)', description: 'Update your profile via API key identity.' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', example: 'John Doe' },
+        timezone: { type: 'string', example: 'America/New_York' },
+        workingHoursStart: { type: 'number', example: 9, description: 'Hour (0-23)' },
+        workingHoursEnd: { type: 'number', example: 17, description: 'Hour (0-23)' },
+        workingDays: { type: 'array', items: { type: 'number' }, example: [1, 2, 3, 4, 5], description: 'Days (0=Sun, 6=Sat)' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Profile updated' })
+  async updateProfileByKey(
+    @Request() req: any,
+    @Body() data: {
+      name?: string;
+      timezone?: string;
+      workingHoursStart?: number;
+      workingHoursEnd?: number;
+      workingDays?: number[];
+    },
+  ) {
+    if (!req.apiKeyUser?.id) {
+      throw new ForbiddenException('API key must belong to a registered user');
+    }
+    return this.usersService.updateProfile(req.apiKeyUser.id, data);
   }
 }

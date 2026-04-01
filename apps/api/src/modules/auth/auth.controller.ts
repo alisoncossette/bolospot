@@ -6,6 +6,7 @@ import { AuthService } from './auth.service';
 import { SessionService } from './session.service';
 import { setSessionCookie, clearSessionCookie } from './cookie.helper';
 import { RegisterDto, LoginDto, EmailAuthSendDto, EmailAuthVerifyDto, OnboardingDto, AuthResponseDto } from './dto/auth.dto';
+import { QuickLoginDto } from './dto/quick-login.dto';
 import { SessionAuthGuard } from './guards/session-auth.guard';
 import { Request as ExpressRequest } from 'express';
 
@@ -78,7 +79,7 @@ export class AuthController {
   @Post('quick-login')
   @ApiOperation({ summary: 'Quick login by email — finds existing user, returns token' })
   async quickLogin(
-    @Body() body: { email: string },
+    @Body() body: QuickLoginDto,
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.quickLogin(body.email);
@@ -194,10 +195,11 @@ export class AuthController {
   @ApiResponse({ status: 302, description: 'Redirects to Google OAuth' })
   async googleSocialAuthorize(
     @Query('redirectUrl') redirectUrl: string,
+    @Query('returnApp') returnApp: string,
     @Res() res: Response,
   ) {
     const redirectUri = `${this.configService.get('API_URL')}/api/auth/google/callback`;
-    const result = await this.authService.getGoogleSocialAuthUrl(redirectUri, redirectUrl);
+    const result = await this.authService.getGoogleSocialAuthUrl(redirectUri, redirectUrl, returnApp);
     res.redirect(result.url);
   }
 
@@ -221,6 +223,21 @@ export class AuthController {
     try {
       const redirectUri = `${this.configService.get('API_URL')}/api/auth/google/callback`;
       const result = await this.authService.handleGoogleSocialCallback(code, redirectUri, state);
+
+      // Widget return: if login came from an external widget app, redirect back with JWT
+      // To add a new widget: set WIDGET_<NAME>_URL env var and add the key here.
+      const WIDGET_RETURN_URLS: Record<string, string> = {
+        bomed:  this.configService.get('BOMED_APP_URL')  || 'https://world.bomed.ai',
+        bohire: this.configService.get('BOHIRE_APP_URL') || 'https://app.bohire.ai',
+        bolove: this.configService.get('BOLOVE_APP_URL') || 'https://app.bolove.ai',
+      };
+      const returnApp = (result as any).returnApp as string | undefined;
+      if (returnApp && WIDGET_RETURN_URLS[returnApp]) {
+        const widgetUrl = WIDGET_RETURN_URLS[returnApp];
+        const r = result as any;
+        const handle = encodeURIComponent(r.user?.handle ? `@${r.user.handle}` : '');
+        return res.redirect(`${widgetUrl}?google_token=${r.accessToken}&handle=${handle}&calendar=connected`);
+      }
 
       // Set session cookie AND pass session as query param (cross-domain fallback)
       const sessionId = await this.createSessionAndSetCookie(result.user, res);

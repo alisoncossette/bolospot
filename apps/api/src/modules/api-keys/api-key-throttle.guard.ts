@@ -58,32 +58,10 @@ export class ApiKeyThrottleGuard implements CanActivate {
     const isHumanVerified = request.apiKeyUser?.isHumanVerified === true;
 
     try {
-      // ─── Unverified accounts: 5 requests/day total ─────────────────────
-      if (!isHumanVerified) {
-        const dailyKey = `throttle:unverified:${keyId}:daily`;
-        const count = await this.redis.incr(dailyKey);
+      // TODO: Re-enable unverified throttle once verification flow is live
+      // For now, all accounts get per-endpoint rate limits
 
-        // Set TTL on first request of the window
-        if (count === 1) {
-          await this.redis.expire(dailyKey, UNVERIFIED_WINDOW_SECONDS);
-        }
-
-        if (count > UNVERIFIED_DAILY_LIMIT) {
-          const ttl = await this.redis.ttl(dailyKey);
-          this.logger.warn(`Unverified rate limit: key ${keyId} (${count}/${UNVERIFIED_DAILY_LIMIT} daily)`);
-          throw new HttpException(
-            {
-              statusCode: HttpStatus.TOO_MANY_REQUESTS,
-              message: `Unverified account: max ${UNVERIFIED_DAILY_LIMIT} requests per day. Verify your identity for higher limits.`,
-              retryAfter: ttl > 0 ? ttl : UNVERIFIED_WINDOW_SECONDS,
-              verifyUrl: 'https://bolospot.com/dashboard',
-            },
-            HttpStatus.TOO_MANY_REQUESTS,
-          );
-        }
-      }
-
-      // ─── Verified accounts: per-endpoint limits ────────────────────────
+      // ─── Per-endpoint limits ─────────────────────────────────────────
       const limits = this.reflector.get<{ maxRequests: number; windowSeconds: number }>(
         RATE_LIMIT_KEY,
         context.getHandler(),

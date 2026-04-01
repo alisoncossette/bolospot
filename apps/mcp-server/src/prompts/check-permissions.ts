@@ -19,10 +19,10 @@ export function getCheckPermissionsMessages(handle: string) {
           type: 'text' as const,
           text:
             `Check my Bolo access with @${handle}.\n\n` +
-            `Use check_access to see what they've shared with me, and let me know:\n` +
+            `Use check_access to see what they've shared with me (it includes booking tier too), and let me know:\n` +
             `- What permission categories (widgets) I have access to and their scopes\n` +
             `- What I could request that I don't have yet (use list_widgets as reference)\n` +
-            `- What booking tier I get with check_booking_tier\n` +
+            `- What booking tier I get (direct, approval, or blocked)\n` +
             `- Whether I have any pending access requests`,
         },
       },

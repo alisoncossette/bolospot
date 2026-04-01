@@ -44,6 +44,16 @@ export class ConnectionsService {
     });
   }
 
+  async getUserById(userId: string) {
+    return this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        needsOnboarding: true,
+      },
+    });
+  }
+
   async hasConnectedCalendar(userId: string): Promise<boolean> {
     const count = await this.prisma.calendarConnection.count({
       where: { userId, isEnabled: true },
@@ -64,7 +74,7 @@ export class ConnectionsService {
     return connection;
   }
 
-  async getGoogleAuthUrl(userId: string, redirectUri: string) {
+  async getGoogleAuthUrl(userId: string, redirectUri: string, returnUrl?: string) {
     const clientId = this.configService.get('GOOGLE_CLIENT_ID');
     const scopes = [
       'https://www.googleapis.com/auth/userinfo.email',
@@ -73,7 +83,7 @@ export class ConnectionsService {
       'https://www.googleapis.com/auth/calendar.events',
     ].join(' ');
 
-    const state = Buffer.from(JSON.stringify({ userId })).toString('base64');
+    const state = Buffer.from(JSON.stringify({ userId, returnUrl })).toString('base64');
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -164,6 +174,11 @@ export class ConnectionsService {
       this.logger.error(`Failed to create booking profile for connection: ${err.message}`);
     });
 
+    // Auto-grant self calendar access (so owner's MCP agent can read their own calendar)
+    this.ensureSelfCalendarGrant(userId).catch((err) => {
+      this.logger.warn(`Failed to auto-grant calendar self-access: ${err.message}`);
+    });
+
     // Create UserIdentity for the Google account (verified since OAuth succeeded)
     const googleIdentityType = await this.prisma.identityType.findUnique({
       where: { code: 'GOOGLE' },
@@ -245,6 +260,59 @@ export class ConnectionsService {
     });
 
     return { success: true };
+  }
+
+  // Create a Google calendar connection directly from access/refresh tokens
+  // Used when the user signs in with Google — we already have their tokens
+  async createConnectionFromGoogleTokens(
+    userId: string,
+    tokens: { access_token: string; refresh_token?: string; expires_in?: number; scope?: string },
+    profile: { id: string; email: string },
+  ) {
+    try {
+      const connection = await this.prisma.calendarConnection.upsert({
+        where: {
+          userId_provider_providerAccountId: {
+            userId,
+            provider: CalendarProvider.GOOGLE,
+            providerAccountId: profile.id,
+          },
+        },
+        update: {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || undefined,
+          expiresAt: tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000) : undefined,
+          scope: tokens.scope,
+          accountEmail: profile.email,
+          syncStatus: 'PENDING',
+        },
+        create: {
+          userId,
+          provider: CalendarProvider.GOOGLE,
+          providerAccountId: profile.id,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || null,
+          expiresAt: tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000) : null,
+          scope: tokens.scope || null,
+          accountEmail: profile.email,
+          syncStatus: 'PENDING',
+        },
+      });
+
+      // Create booking profile and self-grant in background
+      this.ensureBookingProfileForConnection(userId, connection.id).catch((err) => {
+        this.logger.warn(`createConnectionFromGoogleTokens: booking profile: ${err.message}`);
+      });
+      this.ensureSelfCalendarGrant(userId).catch((err) => {
+        this.logger.warn(`createConnectionFromGoogleTokens: self-grant: ${err.message}`);
+      });
+
+      this.logger.log(`Auto-created calendar connection for user ${userId} from Google login`);
+      return connection;
+    } catch (err) {
+      this.logger.warn(`createConnectionFromGoogleTokens failed (non-fatal): ${err.message}`);
+      return null;
+    }
   }
 
   async getMicrosoftAuthUrl(userId: string, redirectUri: string) {
@@ -872,6 +940,12 @@ export class ConnectionsService {
     });
     if (existing) return;
 
+    // First connected calendar becomes the public doorstep default; all subsequent are private (slug-accessible only)
+    const hasPublicProfile = await this.prisma.bookingProfile.findFirst({
+      where: { userId, visibility: 'PUBLIC', isActive: true },
+    });
+    const visibility = hasPublicProfile ? 'PRIVATE' : 'PUBLIC';
+
     const slug = this.generateConnectionSlug(connection.accountEmail, connection.provider);
 
     // Handle slug collisions
@@ -895,11 +969,41 @@ export class ConnectionsService {
         durations: [15, 30, 60],
         customDays: [],
         isActive: true,
-        visibility: 'PUBLIC',
+        visibility,
       },
     });
 
     this.logger.log(`Created booking profile "${finalSlug}" for connection ${connectionId}`);
+  }
+
+  async ensureSelfCalendarGrant(userId: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { handle: true },
+    });
+    if (!user?.handle) return;
+
+    // Check if self-grant already exists
+    const existing = await this.prisma.grant.findFirst({
+      where: {
+        grantorId: userId,
+        granteeId: userId,
+        widget: 'calendar',
+        isActive: true,
+      },
+    });
+    if (existing) return;
+
+    await this.prisma.grant.create({
+      data: {
+        grantorId: userId,
+        granteeId: userId,
+        granteeHandle: user.handle.toLowerCase(),
+        widget: 'calendar',
+        scopes: ['free_busy', 'events:read', 'events:create'],
+      },
+    });
+    this.logger.log(`Auto-granted calendar self-access for @${user.handle}`);
   }
 
   private generateConnectionSlug(email: string | null, provider: string): string {

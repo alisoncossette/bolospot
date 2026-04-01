@@ -14,6 +14,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
 import { BillingService } from './billing.service';
 import { UsageService } from './usage.service';
+import { CreateCheckoutDto } from './dto/billing.dto';
 
 @ApiTags('billing')
 @Controller('billing')
@@ -43,7 +44,7 @@ export class BillingController {
   @ApiResponse({ status: 200, description: 'Checkout URL returned' })
   async createCheckout(
     @Request() req: any,
-    @Body() body: { plan: 'PRO' | 'BUILDER' },
+    @Body() body: CreateCheckoutDto,
   ) {
     return this.billingService.createCheckoutSession(req.user.id, body.plan);
   }

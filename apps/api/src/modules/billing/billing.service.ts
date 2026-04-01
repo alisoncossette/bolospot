@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import Stripe from 'stripe';
 import { PlanName, PLAN_LIMITS } from './usage.service';
 
@@ -15,7 +15,7 @@ export class BillingService {
   ) {
     const key = this.config.get<string>('STRIPE_SECRET_KEY');
     if (key) {
-      this.stripe = new Stripe(key, { apiVersion: '2025-01-27.acacia' });
+      this.stripe = new Stripe(key);
     } else {
       this.logger.warn('STRIPE_SECRET_KEY not set — billing disabled');
     }

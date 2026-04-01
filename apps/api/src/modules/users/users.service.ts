@@ -90,6 +90,45 @@ export class UsersService {
     return userEmail?.user || null;
   }
 
+  async search(query: string, excludeUserId?: string) {
+    const q = query.trim().toLowerCase().replace(/^@/, '');
+    if (q.length < 2) return [];
+
+    // Check if query looks like an email
+    const isEmail = q.includes('@');
+
+    if (isEmail) {
+      const user = await this.findByEmail(q);
+      if (user && user.id !== excludeUserId) {
+        return [{
+          id: user.id,
+          handle: user.handle,
+          name: user.name,
+          verificationLevel: user.verificationLevel,
+        }];
+      }
+      return [];
+    }
+
+    // Search by handle (prefix match)
+    const users = await this.prisma.user.findMany({
+      where: {
+        handle: { contains: q, mode: 'insensitive' },
+        ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
+      },
+      select: {
+        id: true,
+        handle: true,
+        name: true,
+        verificationLevel: true,
+      },
+      take: 20,
+      orderBy: { handle: 'asc' },
+    });
+
+    return users;
+  }
+
   async updateProfile(userId: string, data: {
     name?: string;
     timezone?: string;
@@ -101,6 +140,9 @@ export class UsersService {
     recordingPref?: string;
     busyBlockSyncMinutes?: number;
     busyBlockTitle?: string;
+    defaultAccessAny?: string;
+    defaultAccessVerified?: string;
+    defaultAccessTrusted?: string;
   }) {
     return this.prisma.user.update({
       where: { id: userId },

@@ -6,11 +6,12 @@ import {
   Patch,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   ForbiddenException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiBody, ApiSecurity } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiBody, ApiQuery, ApiSecurity } from '@nestjs/swagger';
 import { GrantsService } from './grants.service';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
 import { ApiKeyGuard } from '../api-keys/api-key.guard';
@@ -22,6 +23,16 @@ import { RateLimit } from '../api-keys/api-key-throttle.guard';
 export class GrantsController {
   constructor(private grantsService: GrantsService) {}
 
+  // ─── Public endpoints (no auth) ──────────────────────────────────────
+
+  @Get('grants/pending')
+  @ApiOperation({ summary: 'Check pending grants', description: 'Check how many pending grants are waiting for an email address. No auth required — returns count only, no details.' })
+  @ApiQuery({ name: 'email', required: true, description: 'Email address to check' })
+  @ApiResponse({ status: 200, description: 'Pending grant count' })
+  async checkPendingGrants(@Query('email') email: string) {
+    return this.grantsService.countPendingGrantsByEmail(email);
+  }
+
   // ─── Authenticated endpoints (JWT - dashboard / CLI with login) ──────
 
   @Post('grants')
@@ -31,9 +42,10 @@ export class GrantsController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['granteeHandle', 'widget', 'scopes'],
+      required: ['widget', 'scopes'],
       properties: {
-        granteeHandle: { type: 'string', example: '@jane' },
+        granteeHandle: { type: 'string', example: '@jane', description: 'Target @handle (provide this or granteeEmail)' },
+        granteeEmail: { type: 'string', example: 'jane@example.com', description: 'Target email — creates a pending invite if not on Bolo' },
         widget: { type: 'string', example: 'calendar' },
         scopes: { type: 'array', items: { type: 'string' }, example: ['free_busy'] },
         note: { type: 'string', example: 'My assistant' },
@@ -45,6 +57,7 @@ export class GrantsController {
   async createGrant(@Request() req: any, @Body() body: any) {
     return this.grantsService.createGrant(req.user.id, {
       granteeHandle: body.granteeHandle,
+      granteeEmail: body.granteeEmail,
       widget: body.widget,
       scopes: body.scopes,
       note: body.note,
@@ -113,6 +126,79 @@ export class GrantsController {
     return this.grantsService.getWidgets();
   }
 
+  // ─── API key endpoints (for MCP / agents) ──────────────────────────
+
+  @Get('grants/given/key')
+  @UseGuards(ApiKeyGuard, ApiKeyThrottleGuard)
+  @RateLimit(60, 60)
+  @ApiSecurity('api-key')
+  @ApiOperation({ summary: 'List grants given (API key)', description: 'List all grants I have given out. Identity from API key.' })
+  async listGrantsGivenByKey(@Request() req: any) {
+    if (!req.apiKeyUser?.id) {
+      throw new ForbiddenException('API key must belong to a registered user');
+    }
+    return this.grantsService.listMyGrants(req.apiKeyUser.id);
+  }
+
+  @Get('grants/received/key')
+  @UseGuards(ApiKeyGuard, ApiKeyThrottleGuard)
+  @RateLimit(60, 60)
+  @ApiSecurity('api-key')
+  @ApiOperation({ summary: 'List grants received (API key)', description: 'List all grants I have received. Identity from API key.' })
+  async listGrantsReceivedByKey(@Request() req: any) {
+    if (!req.apiKeyUser?.id) {
+      throw new ForbiddenException('API key must belong to a registered user');
+    }
+    return this.grantsService.listGrantsToMe(req.apiKeyUser.id);
+  }
+
+  @Post('grants/key')
+  @UseGuards(ApiKeyGuard, ApiKeyThrottleGuard)
+  @RateLimit(20, 60)
+  @ApiSecurity('api-key')
+  @ApiOperation({ summary: 'Create grant (API key)', description: 'Grant access to another @handle. Identity from API key.' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['widget', 'scopes'],
+      properties: {
+        granteeHandle: { type: 'string', example: '@jane', description: 'Target @handle (provide this or granteeEmail)' },
+        granteeEmail: { type: 'string', example: 'jane@example.com', description: 'Target email — creates a pending invite if not on Bolo' },
+        widget: { type: 'string', example: 'calendar' },
+        scopes: { type: 'array', items: { type: 'string' }, example: ['free_busy'] },
+        note: { type: 'string', example: 'My assistant' },
+        expiresAt: { type: 'string', format: 'date-time' },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Grant created' })
+  async createGrantByKey(@Request() req: any, @Body() body: any) {
+    if (!req.apiKeyUser?.id) {
+      throw new ForbiddenException('API key must belong to a registered user');
+    }
+    return this.grantsService.createGrant(req.apiKeyUser.id, {
+      granteeHandle: body.granteeHandle,
+      granteeEmail: body.granteeEmail,
+      widget: body.widget,
+      scopes: body.scopes,
+      note: body.note,
+      expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
+    });
+  }
+
+  @Delete('grants/:id/key')
+  @UseGuards(ApiKeyGuard, ApiKeyThrottleGuard)
+  @RateLimit(20, 60)
+  @ApiSecurity('api-key')
+  @ApiOperation({ summary: 'Revoke grant (API key)', description: 'Revoke a previously created grant. Identity from API key.' })
+  @ApiParam({ name: 'id', description: 'Grant ID' })
+  async revokeGrantByKey(@Request() req: any, @Param('id') id: string) {
+    if (!req.apiKeyUser?.id) {
+      throw new ForbiddenException('API key must belong to a registered user');
+    }
+    return this.grantsService.revokeGrant(req.apiKeyUser.id, id);
+  }
+
   // ─── Access check (AUTHENTICATED ONLY — no spoofing) ────────────────
 
   @Get('@:handle/access')
@@ -160,7 +246,7 @@ export class GrantsController {
     return {
       handle: result.handle,
       exists: result.exists,
-      claimUrl: result.exists ? undefined : `https://bolospot.com/${result.handle}`,
+      claimUrl: result.exists ? undefined : `https://bolospot.com/b/${result.handle}`,
     };
   }
 

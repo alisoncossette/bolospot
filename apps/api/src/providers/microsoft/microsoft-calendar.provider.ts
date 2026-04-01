@@ -39,7 +39,7 @@ export class MicrosoftCalendarProvider {
     endDate: Date,
   ) {
     // Use calendarView to get expanded recurring event instances
-    const select = 'id,subject,bodyPreview,location,start,end,showAs,isAllDay,isCancelled,webLink';
+    const select = 'id,subject,bodyPreview,location,start,end,showAs,isAllDay,isCancelled,webLink,sensitivity,categories';
 
     const params = new URLSearchParams({
       startDateTime: startDate.toISOString(),
@@ -86,8 +86,10 @@ export class MicrosoftCalendarProvider {
         isAllDay: event.isAllDay || false,
         status: event.isCancelled ? 'CANCELLED' : 'CONFIRMED',
         showAs: this.mapShowAs(event.showAs),
+        visibility: event.sensitivity === 'private' || event.sensitivity === 'confidential' ? 'private' : 'default',
         externalUrl: event.webLink || null,
         boloMeetingId,
+        isBoloBusyBlock: Array.isArray(event.categories) && event.categories.includes('Bolo Busy Block'),
       };
     });
   }

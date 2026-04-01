@@ -12,7 +12,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBody, ApiBearerAuth, ApiSecurity } from '@nestjs/swagger';
 import { Response } from 'express';
 import { DateTime } from 'luxon';
 import { BookingService } from './booking.service';
@@ -20,7 +20,12 @@ import { VisitorOAuthService } from './visitor-oauth.service';
 import { GrantsService } from '../grants/grants.service';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
 import { OptionalSessionAuthGuard } from '../auth/guards/optional-session-auth.guard';
+import { ApiKeyGuard } from '../api-keys/api-key.guard';
+import { ApiKeyThrottleGuard } from '../api-keys/api-key-throttle.guard';
+import { RateLimit } from '../api-keys/api-key-throttle.guard';
+import { ApiKeysService } from '../api-keys/api-keys.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
+import { SetContactTierDto, SetDefaultTierDto, UpdateBookingProfileByKeyDto } from './dto/booking.dto';
 import { UsageService } from '../billing/usage.service';
 
 @ApiTags('booking')
@@ -31,6 +36,7 @@ export class BookingController {
     private visitorOAuthService: VisitorOAuthService,
     private grantsService: GrantsService,
     private usageService: UsageService,
+    private apiKeysService: ApiKeysService,
   ) {}
 
   @Get(':handle/profiles')
@@ -280,7 +286,7 @@ export class BookingController {
   async setContactTier(
     @Param('handle') handle: string,
     @Request() req: any,
-    @Body() body: { contactHandle?: string; contactEmail?: string; tier: 'direct' | 'approval' | 'blocked' },
+    @Body() body: SetContactTierDto,
   ) {
     const userId = req.user.id;
     const userHandle = await this.grantsService.getUserHandle(userId);
@@ -314,7 +320,7 @@ export class BookingController {
   async setDefaultTier(
     @Param('handle') handle: string,
     @Request() req: any,
-    @Body() body: { autoApprove: boolean },
+    @Body() body: SetDefaultTierDto,
   ) {
     const userId = req.user.id;
     const userHandle = await this.grantsService.getUserHandle(userId);
@@ -328,18 +334,18 @@ export class BookingController {
   @Post(':handle/book')
   @UseGuards(OptionalSessionAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Book a meeting', description: 'Book a time slot with a user. Booking tier (direct/approval) is resolved from the visitor\'s grant level.' })
+  @ApiOperation({ summary: 'Book a meeting', description: 'Book a time slot with a user. Booking tier (direct/approval) is resolved from the visitor\'s grant level. When authenticated via API key, name and email are auto-filled from your profile if not provided.' })
   @ApiParam({ name: 'handle', description: 'User handle' })
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['startTime', 'duration', 'timezone', 'name', 'email'],
+      required: ['startTime', 'duration', 'timezone'],
       properties: {
         startTime: { type: 'string', format: 'date-time', description: 'ISO datetime of chosen slot' },
         duration: { type: 'number', description: 'Duration in minutes' },
         timezone: { type: 'string', description: 'Visitor timezone' },
-        name: { type: 'string', description: 'Visitor name' },
-        email: { type: 'string', format: 'email', description: 'Visitor email' },
+        name: { type: 'string', description: 'Visitor name (auto-filled from profile when using API key)' },
+        email: { type: 'string', format: 'email', description: 'Visitor email (auto-filled from profile when using API key)' },
         notes: { type: 'string', description: 'Optional notes' },
         additionalAttendees: { type: 'array', items: { type: 'string', format: 'email' }, description: 'Additional attendee emails' },
         additionalHandles: { type: 'array', items: { type: 'string' }, description: 'Additional Bolo @handles to include in the meeting' },
@@ -353,12 +359,38 @@ export class BookingController {
     @Body() dto: CreateBookingDto,
     @Request() req: any,
   ) {
+    // Try API key auth if no session user (OptionalSessionAuthGuard skips bolo_live_ tokens)
+    if (!req.apiKeyUser) {
+      const apiKey =
+        req.headers['x-api-key'] ||
+        (req.headers['authorization']?.startsWith('Bearer bolo_live_')
+          ? req.headers['authorization'].substring(7)
+          : null);
+      if (apiKey) {
+        const result = await this.apiKeysService.validateApiKey(apiKey);
+        if (result) {
+          req.apiKeyUser = result.user;
+          req.apiKey = result.apiKey;
+        }
+      }
+    }
+
+    // Auto-fill name and email from API key user profile if not provided
+    if (req.apiKeyUser) {
+      if (!dto.name && req.apiKeyUser.name) {
+        dto.name = req.apiKeyUser.name;
+      }
+      if (!dto.email && req.apiKeyUser.email) {
+        dto.email = req.apiKeyUser.email;
+      }
+    }
+
     if (!dto.startTime || !dto.duration || !dto.timezone || !dto.name || !dto.email) {
       throw new BadRequestException('startTime, duration, timezone, name, and email are required');
     }
 
     // Resolve booking tier from visitor's grant level
-    const visitorHandle = req.user?.handle || null;
+    const visitorHandle = req.user?.handle || req.apiKeyUser?.handle || null;
     const { tier } = await this.grantsService.resolveBookingAccess(handle, visitorHandle);
 
     if (tier === 'blocked') {
@@ -373,5 +405,73 @@ export class BookingController {
     }
 
     return result;
+  }
+
+  // ─── Session-auth endpoints (for dashboard) ──────────────────────────
+
+  @Get('my/profiles')
+  @UseGuards(SessionAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List my booking profiles', description: 'Get all booking profiles for the authenticated user with connection info' })
+  @ApiResponse({ status: 200, description: 'Profiles returned' })
+  async listMyProfiles(@Request() req: any) {
+    const profiles = await this.bookingService.listOwnerProfiles(req.user.id);
+    return profiles;
+  }
+
+  @Patch('my/profiles/:profileId')
+  @UseGuards(SessionAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update booking profile', description: 'Update a booking profile slug, name, durations, or buffer' })
+  @ApiParam({ name: 'profileId', description: 'Booking profile ID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Custom booking link slug' },
+        name: { type: 'string', description: 'Profile display name' },
+        durations: { type: 'array', items: { type: 'number' } },
+        bufferBefore: { type: 'number' },
+        bufferAfter: { type: 'number' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Profile updated' })
+  async updateMyProfile(
+    @Param('profileId') profileId: string,
+    @Request() req: any,
+    @Body() data: any,
+  ) {
+    return this.bookingService.updateBookingProfile(req.user.id, data, profileId);
+  }
+
+  // ─── API key endpoints (for MCP / agents) ──────────────────────────
+
+  @Patch('profile/key')
+  @UseGuards(ApiKeyGuard, ApiKeyThrottleGuard)
+  @RateLimit(30, 60)
+  @ApiSecurity('api-key')
+  @ApiOperation({ summary: 'Update booking profile (API key)', description: 'Update your booking profile settings via API key identity.' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        durations: { type: 'array', items: { type: 'number' }, example: [30, 60], description: 'Allowed meeting durations in minutes' },
+        bufferBefore: { type: 'number', example: 10, description: 'Buffer minutes before meetings' },
+        bufferAfter: { type: 'number', example: 10, description: 'Buffer minutes after meetings' },
+        name: { type: 'string', example: 'Default', description: 'Booking profile name' },
+        description: { type: 'string', example: 'Book a meeting with me', description: 'Booking profile description' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Booking profile updated' })
+  async updateBookingProfileByKey(
+    @Request() req: any,
+    @Body() data: UpdateBookingProfileByKeyDto,
+  ) {
+    if (!req.apiKeyUser?.id) {
+      throw new ForbiddenException('API key must belong to a registered user');
+    }
+    return this.bookingService.updateBookingProfile(req.apiKeyUser.id, data);
   }
 }

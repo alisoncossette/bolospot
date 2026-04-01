@@ -113,4 +113,7 @@ export class AuthResponseDto {
 
   @ApiProperty({ type: UserResponseDto })
   user: UserResponseDto;
+
+  @ApiProperty({ example: 3, description: 'Number of pending email grants resolved on signup', required: false })
+  resolvedGrantCount?: number;
 }

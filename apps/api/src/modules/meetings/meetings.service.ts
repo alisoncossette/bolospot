@@ -1902,7 +1902,7 @@ export class MeetingsService {
 
     for (const connection of connections) {
       try {
-        let accessToken = connection.accessToken;
+        let accessToken = connection.accessToken as string;
         if (!accessToken) continue;
 
         const calendarId = connection.calendars[0]?.externalId || 'primary';
@@ -1923,6 +1923,11 @@ export class MeetingsService {
             this.logger.warn(`Token refresh failed for @${connection.user.handle} during cancel, skipping`);
             continue;
           }
+        }
+
+        if (!accessToken) {
+          this.logger.warn(`No access token for @${connection.user.handle}, skipping calendar event deletion`);
+          continue;
         }
 
         if (connection.provider === 'GOOGLE') {

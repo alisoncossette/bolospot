@@ -9,9 +9,10 @@ import { GrantsModule } from '../grants/grants.module';
 import { AuthModule } from '../auth/auth.module';
 import { BillingModule } from '../billing/billing.module';
 import { ContactsModule } from '../contacts/contacts.module';
+import { ApiKeysModule } from '../api-keys/api-keys.module';
 
 @Module({
-  imports: [PrismaModule, AvailabilityModule, ConnectionsModule, GrantsModule, AuthModule, BillingModule, ContactsModule],
+  imports: [PrismaModule, AvailabilityModule, ConnectionsModule, GrantsModule, AuthModule, BillingModule, ContactsModule, ApiKeysModule],
   controllers: [BookingController],
   providers: [BookingService, VisitorOAuthService],
   exports: [BookingService],

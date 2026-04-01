@@ -49,6 +49,7 @@ async function bootstrap() {
   // CORS - allow multiple origins
   const allowedOrigins = [
     'http://localhost:3000',
+    'http://localhost:8081',
     'https://bolospot.com',
     'https://www.bolospot.com',
   ];

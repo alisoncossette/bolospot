@@ -1,136 +1,113 @@
-# bolo-mcp
+# Bolo MCP Server
 
-**Give your AI agent a trust layer.**
+> Be on the look out for your ID. Your AI gatekeeper.
 
-Your agent can schedule meetings, check permissions, message other agents, and access data — but only what you've allowed. Every action goes through the Bolo trust graph. No grant, no access.
+MCP (Model Context Protocol) server for Bolo — peer-to-peer digital permissions for AI agents. Connect your calendar, manage trust grants, and let agents communicate through the relay.
 
-```
-You: "Book a PT appointment with Vermont Physical Therapy"
-
-Claude → lookup_handle("@vermontpt")          ✓ found
-       → check_access("@vermontpt", "bomed")  ✓ granted
-       → get_availability("@vermontpt")        ✓ 3 slots
-       → book_meeting(...)                     ✓ booked
-       → "You're booked for Tuesday at 2pm."
-
-You: "Revoke their access to my insurance."
-
-Claude → revoke. Done. They see nothing.
-```
-
-## Install
+## Installation
 
 ```bash
-npm install -g bolo-mcp
+npm install -g @bolospot/mcp
+# or use npx for zero-install
+npx @bolospot/mcp
 ```
 
-### Claude Desktop
+## Configuration
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on Mac):
 
 ```json
 {
   "mcpServers": {
     "bolo": {
       "command": "npx",
-      "args": ["bolo-mcp"],
+      "args": ["-y", "@bolospot/mcp"],
       "env": {
-        "BOLO_API_KEY": "bolo_live_xxx"
+        "BOLO_API_KEY": "bolo_live_..."
       }
     }
   }
 }
 ```
 
-### Claude Code
+Get your API key at [bolospot.com/dashboard/api-keys](https://bolospot.com/dashboard/api-keys).
 
-```bash
-claude mcp add bolo -- npx bolo-mcp
+## Toolsets
+
+Control which tools are exposed with `BOLO_TOOLSET`:
+
+| Toolset | Tools | For |
+|---------|-------|-----|
+| `developer` | 14 | Widget builders (relay, grants, widget registration) |
+| `scheduling` | 7 | Scheduling agents (availability, booking, events) |
+| `account` | 4 | Profile and settings management |
+| `all` | 21 | Everything (default) |
+
+```json
+{
+  "env": {
+    "BOLO_API_KEY": "bolo_live_...",
+    "BOLO_TOOLSET": "developer"
+  }
+}
 ```
 
-### Any MCP Client
-
-Stdio transport. Follows the spec. If your agent speaks MCP, it speaks Bolo.
-
-## Tools
-
-### Identity & Access
-
-| Tool | What your agent can do |
-|------|----------------------|
-| `lookup_handle` | Find anyone by @handle |
-| `check_access` | "Do I have permission to access this?" |
-| `request_access` | Send a bolo — request permission from another handle |
-| `list_widgets` | See what permission categories exist |
+## Available Tools (21)
 
 ### Scheduling
+- **get_availability** — busy periods or bookable time slots for a @handle
+- **find_mutual_time** — find when multiple people are all free
+- **get_booking_profile** — public booking profile (durations, working hours)
+- **book_meeting** — book a meeting with a @handle or email
+- **get_events** — calendar events (your own or another @handle's)
 
-| Tool | What your agent can do |
-|------|----------------------|
-| `get_availability` | Check someone's free time across all their calendars |
-| `find_mutual_time` | Find when multiple people are all free |
-| `get_available_slots` | Get bookable time slots |
-| `book_meeting` | Book it. Calendar invites sent automatically. |
-| `get_booking_profile` | Get someone's booking preferences |
-| `check_booking_tier` | What level of access do you have? |
+### Permissions & Grants
+- **check_access** — what has a @handle shared with you (includes booking tier)
+- **request_access** — request access to a permission category
+- **create_grant** — grant access to another @handle
+- **revoke_grant** — revoke a previously created grant
+- **list_bolos** — list grants sent, received, or both
 
-### Agent-to-Agent Relay
+### Agent Relay
+- **relay_send** — send a query through the trust boundary
+- **relay_inbox** — check for incoming queries
+- **relay_reply** — reply to a query
+- **relay_check_responses** — poll for responses to your queries
+- **relay_ack** — acknowledge processed messages
 
-| Tool | What your agent can do |
-|------|----------------------|
-| `relay_send` | Send a message to another agent through the trust boundary |
-| `relay_inbox` | Check incoming messages from other agents |
-| `relay_reply` | Reply to an agent query |
-| `relay_check_responses` | Check if anyone responded to your query |
+### Widget Development
+- **register_widget** — register a new permission category for your app
+- **update_widget** — update a registered widget
+- **deactivate_widget** — deactivate a registered widget
+- **list_widgets** — list all available permission categories
 
-## Self-Grant Gate
+### Identity & Profile
+- **lookup_handle** — check if a @handle is registered
+- **update_profile** — update profile, availability, and booking settings
 
-Your agent only does what **you** allow.
+## Quick Example
+
+```
+User: "Schedule a 30-min call with @alice next week"
+
+Claude → check_access("@alice")                    # grants + booking tier
+       → get_availability("@alice", duration: 30)  # bookable slots
+       → book_meeting(...)                         # confirmed
+```
+
+## Full Documentation
+
+See [bolospot.com/docs/mcp-tools](https://bolospot.com/docs/mcp-tools) for complete tool reference with parameters and examples.
+
+## Development
 
 ```bash
-BOLO_SELF_GRANTS=true BOLO_API_KEY=bolo_live_xxx npx bolo-mcp
+pnpm install
+pnpm dev        # run with tsx
+pnpm build      # compile TypeScript
+pnpm start      # run compiled
 ```
 
-When enabled, every tool call is checked against your self-grant permissions before executing. If you haven't granted `schedule:write` to your own agent, it can't book meetings — even if someone else granted you access.
+## License
 
-```
-Agent tries: book_meeting(...)
-Gate checks: owner has "schedule:write"?
-  → Yes: proceeds
-  → No:  "Permission denied. Your owner has not granted
-          schedule:write to this agent."
-```
-
-**Fail-closed.** No grants = no access. The agent tells you exactly what permission it needs and where to enable it.
-
-## The Protocol
-
-Bolo isn't just a scheduling tool. It's the trust layer between agents.
-
-```
-┌──────────────┐         ┌──────────────┐
-│  Your Agent  │  bolo   │ Their Agent  │
-│  (@alice)    │ ◄─────► │ (@vermontpt) │
-└──────┬───────┘         └──────┬───────┘
-       │                        │
-   self-grants              self-grants
-       │                        │
-┌──────┴───────┐         ┌──────┴───────┐
-│     You      │         │    Them      │
-│  (policy)    │         │  (policy)    │
-└──────────────┘         └──────────────┘
-```
-
-Both sides set policy. Both sides control their agents. The relay carries messages. The trust graph enforces boundaries. Nobody is the bottleneck.
-
-## Get Started
-
-1. Claim your @handle at [bolospot.com](https://bolospot.com)
-2. Get your API key from the dashboard
-3. `npx bolo-mcp` — your agent is live
-
----
-
-<p align="center">
-  <a href="https://www.npmjs.com/package/bolo-mcp">npm</a> &middot;
-  <a href="https://bolospot.com">bolospot.com</a> &middot;
-  <a href="https://bolo-api-650440848480.us-central1.run.app/api/docs">API docs</a>
-</p>
+MIT

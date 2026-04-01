@@ -12,7 +12,7 @@ import {
   GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import { tools, toolMap } from './tools/index.js';
+import { activeTools, toolMap } from './tools/index.js';
 import {
   widgetsResource, readWidgets,
   accessResourceTemplate, readAccess,
@@ -27,7 +27,7 @@ import {
 const server = new Server(
   {
     name: 'bolo',
-    version: '0.2.0',
+    version: '0.4.0',
   },
   {
     capabilities: {
@@ -41,7 +41,7 @@ const server = new Server(
 // ─── Tools ───────────────────────────────────────────────
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: tools.map(t => ({
+  tools: activeTools.map(t => ({
     name: t.definition.name,
     description: t.definition.description,
     inputSchema: t.definition.inputSchema,

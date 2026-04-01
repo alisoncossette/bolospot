@@ -1,8 +1,10 @@
-import { Injectable, Inject, Optional, UnauthorizedException, ConflictException, BadRequestException, HttpException, HttpStatus, Logger } from '@nestjs/common';
+import { Injectable, Inject, Optional, UnauthorizedException, ConflictException, BadRequestException, HttpException, HttpStatus, Logger, forwardRef } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
+
 import { RegisterDto, LoginDto, AuthResponseDto } from './dto/auth.dto';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import Redis from 'ioredis';
@@ -35,6 +37,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private emailService: EmailService,
+    private moduleRef: ModuleRef,
     @Optional() @Inject(REDIS_CLIENT) private redis: Redis | null,
   ) {}
 
@@ -199,6 +202,24 @@ export class AuthService {
       this.logger.log(
         `Linked ${linkedParticipants.count} existing meeting invitation(s) to new user @${dto.handle}`
       );
+    }
+
+    // Resolve any pending email-based grants → attach to this user's handle
+    const resolvedGrants = await this.prisma.grant.updateMany({
+      where: {
+        granteeEmail: { equals: dto.email, mode: 'insensitive' },
+        granteeHandle: null,
+        isActive: true,
+        revokedAt: null,
+      },
+      data: {
+        granteeHandle: dto.handle.toLowerCase(),
+        granteeId: user.id,
+      },
+    });
+
+    if (resolvedGrants.count > 0) {
+      this.logger.log(`Resolved ${resolvedGrants.count} pending email grant(s) for new user @${dto.handle}`);
     }
 
     // Generate JWT
@@ -403,8 +424,8 @@ export class AuthService {
     }
 
     // Find or create user
-    let user = await this.prisma.user.findUnique({
-      where: { email },
+    let user = await this.prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
     });
 
     if (!user) {
@@ -662,23 +683,43 @@ export class AuthService {
       });
     }
 
-    const user = await this.prisma.user.create({
-      data: {
-        email: params.email,
-        handle,
-        name: params.name || null,
-        needsOnboarding,
-        timezone: 'UTC',
-        emails: {
-          create: {
-            email: params.email,
-            isPrimary: true,
-            isVerified: params.markEmailVerified,
+    let user: any;
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          email: params.email,
+          handle,
+          name: params.name || null,
+          needsOnboarding,
+          timezone: 'UTC',
+          emails: {
+            create: {
+              email: params.email,
+              isPrimary: true,
+              isVerified: params.markEmailVerified,
+            },
           },
+          identities: { create: identitiesData },
         },
-        identities: { create: identitiesData },
-      },
-    });
+      });
+    } catch (err: any) {
+      // Unique constraint violation — user already exists, find and return them
+      if (err?.code === 'P2002') {
+        this.logger.warn(`User creation race for ${params.email} — falling back to lookup`);
+        const existing = await this.prisma.user.findFirst({
+          where: { email: { equals: params.email, mode: 'insensitive' } },
+        });
+        if (existing) return existing;
+        // Could be a UserEmail or handle collision — try by UserEmail
+        const byEmail = await this.prisma.userEmail.findFirst({
+          where: { email: { equals: params.email, mode: 'insensitive' } },
+          include: { user: true },
+        });
+        if (byEmail) return byEmail.user;
+        throw err; // Unknown collision, re-throw
+      }
+      throw err;
+    }
 
     // Create default booking profile
     await this.prisma.bookingProfile.create({
@@ -704,6 +745,24 @@ export class AuthService {
 
     if (linkedParticipants.count > 0) {
       this.logger.log(`Linked ${linkedParticipants.count} existing invitation(s) to new user @${handle}`);
+    }
+
+    // Resolve any pending email-based grants → attach to this user's handle
+    const resolvedGrants = await this.prisma.grant.updateMany({
+      where: {
+        granteeEmail: { equals: params.email, mode: 'insensitive' },
+        granteeHandle: null,
+        isActive: true,
+        revokedAt: null,
+      },
+      data: {
+        granteeHandle: handle.toLowerCase(),
+        granteeId: user.id,
+      },
+    });
+
+    if (resolvedGrants.count > 0) {
+      this.logger.log(`Resolved ${resolvedGrants.count} pending email grant(s) for new user @${handle}`);
     }
 
     this.logger.log(`Created new user @${handle} via ${params.provider || 'email'} (needsOnboarding=${needsOnboarding})`);
@@ -735,12 +794,18 @@ export class AuthService {
 
   // ── Google OAuth ──────────────────────────────────────────────────
 
-  async getGoogleSocialAuthUrl(redirectUri: string, redirectUrl?: string) {
+  async getGoogleSocialAuthUrl(redirectUri: string, redirectUrl?: string, returnApp?: string) {
     const clientId = this.configService.get('GOOGLE_CLIENT_ID');
-    const scopes = ['openid', 'email', 'profile'].join(' ');
+    // Request calendar scopes too — so signing in with Google auto-connects the calendar
+    const scopes = ['openid', 'email', 'profile',
+      'https://www.googleapis.com/auth/calendar.readonly',
+      'https://www.googleapis.com/auth/calendar.events',
+    ].join(' ');
 
     const stateToken = crypto.randomBytes(32).toString('hex');
-    const stateData = { flow: 'login', redirectUrl: redirectUrl || '/dashboard' };
+    const stateData = { flow: 'login', redirectUrl: redirectUrl || '/dashboard', returnApp };
+    // Encode stateData into the state param itself so it survives Redis misses
+    const stateParam = `${stateToken}.${Buffer.from(JSON.stringify(stateData)).toString('base64url')}`;
     if (this.redis) {
       try {
         await this.redis.set(`oauth:state:${stateToken}`, JSON.stringify(stateData), 'EX', 600);
@@ -754,8 +819,9 @@ export class AuthService {
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: scopes,
-      state: stateToken,
-      prompt: 'select_account',
+      state: stateParam,
+      access_type: 'offline',
+      prompt: 'consent',
     });
 
     return {
@@ -768,8 +834,9 @@ export class AuthService {
     redirectUri: string,
     state: string,
   ): Promise<AuthResponseDto & { redirectUrl: string }> {
-    // Validate state from Redis
-    const stateKey = `oauth:state:${state}`;
+    // State param is either "token" (legacy) or "token.base64data" (new)
+    const [stateToken, stateEncoded] = state.split('.');
+    const stateKey = `oauth:state:${stateToken}`;
     let stateJson: string | null = null;
     if (this.redis) {
       try {
@@ -779,12 +846,20 @@ export class AuthService {
         this.logger.warn(`Redis unavailable for Google OAuth state validation: ${err}`);
       }
     }
+    if (!stateJson && stateEncoded) {
+      // Fall back to the data encoded in the state param itself
+      try {
+        stateJson = Buffer.from(stateEncoded, 'base64url').toString('utf-8');
+      } catch {
+        this.logger.warn('Failed to decode state param fallback');
+      }
+    }
     if (!stateJson) {
       this.logger.warn('Google OAuth state not found — skipping validation (Redis may be unavailable)');
       stateJson = JSON.stringify({ flow: 'login', redirectUrl: '/dashboard' });
     }
 
-    let stateData: { flow: string; redirectUrl: string };
+    let stateData: { flow: string; redirectUrl: string; returnApp?: string };
     try {
       stateData = JSON.parse(stateJson);
     } catch {
@@ -835,8 +910,60 @@ export class AuthService {
       throw new BadRequestException('No email found in Google profile');
     }
 
-    // Find or create user
-    let user = await this.prisma.user.findUnique({ where: { email } });
+    // Find or create user — check by email first, then by Google identity
+    let user = await this.prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+    });
+
+    if (!user) {
+      // Check if this Google account is already linked to a user under a different email
+      const googleIdentityType = await this.prisma.identityType.findUnique({ where: { code: 'GOOGLE' } });
+      if (googleIdentityType) {
+        const existingIdentity = await this.prisma.userIdentity.findUnique({
+          where: { identityTypeId_value: { identityTypeId: googleIdentityType.id, value: email } },
+          include: { user: true },
+        });
+        if (existingIdentity) {
+          user = existingIdentity.user;
+        }
+      }
+
+      // Also check if this email exists as any identity on another user
+      if (!user) {
+        const emailIdentityType = await this.prisma.identityType.findUnique({ where: { code: 'EMAIL' } });
+        if (emailIdentityType) {
+          const existingEmailIdentity = await this.prisma.userIdentity.findUnique({
+            where: { identityTypeId_value: { identityTypeId: emailIdentityType.id, value: email } },
+            include: { user: true },
+          });
+          if (existingEmailIdentity) {
+            user = existingEmailIdentity.user;
+          }
+        }
+      }
+
+      // Finally check the UserEmail table (catches connected calendar emails)
+      if (!user) {
+        const userEmail = await this.prisma.userEmail.findFirst({
+          where: { email: { equals: email, mode: 'insensitive' } },
+          include: { user: true },
+        });
+        if (userEmail) {
+          user = userEmail.user;
+        }
+      }
+
+      // Also check CalendarConnection (catches linked Google/Microsoft calendar accounts)
+      if (!user) {
+        const calendarConnection = await this.prisma.calendarConnection.findFirst({
+          where: { accountEmail: { equals: email, mode: 'insensitive' } },
+          include: { user: true },
+        });
+        if (calendarConnection) {
+          user = calendarConnection.user;
+        }
+      }
+    }
 
     if (!user) {
       user = await this.createNewUser({
@@ -883,10 +1010,29 @@ export class AuthService {
       this.logger.log(`User @${user.handle} logged in via Google OAuth`);
     }
 
+    // Auto-connect Google calendar in the background (non-blocking).
+    // Uses ModuleRef lazy resolution to avoid a circular module dependency.
+    try {
+      const { ConnectionsService } = await import('../connections/connections.service');
+      const connectionsService = this.moduleRef.get(ConnectionsService, { strict: false });
+      connectionsService.createConnectionFromGoogleTokens(
+        user!.id,
+        { access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: tokens.expires_in, scope: tokens.scope },
+        { id: profile.id, email },
+      ).catch((err: Error) => this.logger.warn(`Auto-connect calendar failed: ${err.message}`));
+    } catch {
+      // ConnectionsService unavailable — skip auto-connect silently
+    }
+
+    // Generate JWT for external app return (e.g. BoMed)
+    const accessToken = this.jwtService.sign({ sub: user!.id, handle: user!.handle });
+
     return {
-      ...this.formatUserResponse(user),
+      ...this.formatUserResponse(user!),
       redirectUrl: stateData.redirectUrl || '/dashboard',
-    };
+      returnApp: stateData.returnApp as string | undefined,
+      accessToken,
+    } as AuthResponseDto & { redirectUrl: string; returnApp?: string; accessToken: string };
   }
 
   // ── Email Auth (OTP + Magic Link) ─────────────────────────────────
@@ -1076,10 +1222,51 @@ export class AuthService {
       });
     }
 
+    // Update any grants that referenced the old auto-generated handle
+    if (user.handle !== handle) {
+      const migratedGrants = await this.prisma.grant.updateMany({
+        where: { granteeHandle: user.handle.toLowerCase(), granteeId: userId },
+        data: { granteeHandle: handle.toLowerCase() },
+      });
+      if (migratedGrants.count > 0) {
+        this.logger.log(`Migrated ${migratedGrants.count} grant(s) from @${user.handle} to @${handle}`);
+      }
+    }
+
     this.logger.log(`User completed onboarding: @${handle}`);
 
-    // Return new JWT with updated handle
-    return this.formatUserResponse(updatedUser);
+    // Auto-grant self calendar access (so owner's MCP agent can read their own calendar)
+    try {
+      const calendarWidget = await this.prisma.widget.findFirst({ where: { slug: 'calendar' } });
+      if (calendarWidget) {
+        await this.prisma.grant.create({
+          data: {
+            grantorId: userId,
+            granteeId: userId,
+            granteeHandle: handle.toLowerCase(),
+            widget: 'calendar',
+            scopes: ['free_busy', 'events:read', 'events:create'],
+          },
+        });
+        this.logger.log(`Auto-granted calendar self-access for @${handle}`);
+      }
+    } catch (e) {
+      this.logger.warn(`Failed to auto-grant calendar self-access: ${e.message}`);
+    }
+
+    // Count how many grants were resolved for this user (from email invites)
+    const resolvedGrantCount = await this.prisma.grant.count({
+      where: {
+        granteeId: userId,
+        granteeEmail: { not: null },
+        isActive: true,
+        revokedAt: null,
+      },
+    });
+
+    // Return new JWT with updated handle + resolved grant info
+    const response = this.formatUserResponse(updatedUser);
+    return { ...response, resolvedGrantCount };
   }
 
   async generateUniqueHandle(baseName: string): Promise<string> {

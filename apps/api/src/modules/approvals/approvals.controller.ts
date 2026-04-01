@@ -11,11 +11,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { ApprovalsService } from './approvals.service';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
-
-interface RespondBody {
-  status: 'APPROVED' | 'DENIED';
-  responseNote?: string;
-}
+import { RespondToApprovalDto } from './dto/approvals.dto';
 
 @ApiTags('approvals')
 @Controller('approvals')
@@ -71,7 +67,7 @@ export class ApprovalsController {
   async respondToApproval(
     @Request() req: any,
     @Param('id') id: string,
-    @Body() body: RespondBody,
+    @Body() body: RespondToApprovalDto,
   ) {
     return this.approvalsService.respondToApproval(req.user.id, id, body);
   }

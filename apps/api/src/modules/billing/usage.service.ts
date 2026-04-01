@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 // Plan limits per month
 // hardCap = true: block at limit. false: allow overage (billed later via Stripe).

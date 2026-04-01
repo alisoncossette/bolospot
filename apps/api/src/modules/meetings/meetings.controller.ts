@@ -13,6 +13,15 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery, ApiBody } from '@nestjs/swagger';
 import { MeetingsService } from './meetings.service';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
+import {
+  CreateMeetingDto,
+  BookMeetingDto,
+  RespondToInvitationDto,
+  ConfirmMeetingDto,
+  UpdateMeetingRangeDto,
+  RequestHoursOverrideDto,
+  RespondToHoursOverrideDto,
+} from './dto/meetings.dto';
 import { Request as ExpressRequest } from 'express';
 
 interface AuthenticatedRequest extends ExpressRequest {
@@ -55,24 +64,7 @@ export class MeetingsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async createMeeting(
     @Request() req: AuthenticatedRequest,
-    @Body()
-    body: {
-      title: string;
-      description?: string;
-      duration: number;
-      dateRangeStart: string;
-      dateRangeEnd: string;
-      timezone: string;
-      timeRangeStart?: number;
-      timeRangeEnd?: number;
-      participantEmails?: string[];
-      participantHandles?: string[];
-      participantPhones?: string[];
-      recordingPolicy?: string;
-      preferredConnectionId?: string;
-      createVideoConference?: boolean;
-      workflow?: string;
-    },
+    @Body() body: CreateMeetingDto,
   ) {
     return this.meetingsService.createMeeting(req.user.id, {
       ...body,
@@ -112,17 +104,7 @@ export class MeetingsController {
   @ApiResponse({ status: 201, description: 'Meeting booked' })
   async bookMeeting(
     @Request() req: AuthenticatedRequest,
-    @Body()
-    body: {
-      title: string;
-      description?: string;
-      startTime: string;
-      endTime: string;
-      timezone?: string;
-      participantHandles?: string[];
-      participantEmails?: string[];
-      location?: string;
-    },
+    @Body() body: BookMeetingDto,
   ) {
     return this.meetingsService.bookMeeting(req.user.id, {
       ...body,
@@ -166,13 +148,50 @@ export class MeetingsController {
   async respondToInvitation(
     @Request() req: AuthenticatedRequest,
     @Param('participantId') participantId: string,
-    @Body() body: { response: 'APPROVED' | 'DECLINED' },
+    @Body() body: RespondToInvitationDto,
   ) {
     return this.meetingsService.respondToInvitation(
       participantId,
       req.user.id,
       body.response,
     );
+  }
+
+  @Get('override-requests')
+  @UseGuards(SessionAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List override requests', description: 'List hours override requests for the authenticated user' })
+  @ApiQuery({ name: 'filter', required: false, enum: ['pending', 'all'] })
+  @ApiResponse({ status: 200, description: 'Override requests returned' })
+  async getHoursOverrideRequests(
+    @Request() req: AuthenticatedRequest,
+    @Query('filter') filter?: 'pending' | 'all',
+  ) {
+    return this.meetingsService.getHoursOverrideRequests(req.user.id, filter);
+  }
+
+  @Patch('override-requests/:overrideId/respond')
+  @UseGuards(SessionAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Respond to override request', description: 'Approve or decline an hours override request' })
+  @ApiParam({ name: 'overrideId', description: 'Override request ID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['response'],
+      properties: {
+        response: { type: 'string', enum: ['APPROVED', 'DECLINED'] },
+        responseNote: { type: 'string', description: 'Optional note with response' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Override request responded to' })
+  async respondToHoursOverride(
+    @Request() req: AuthenticatedRequest,
+    @Param('overrideId') overrideId: string,
+    @Body() body: RespondToHoursOverrideDto,
+  ) {
+    return this.meetingsService.respondToHoursOverride(overrideId, req.user.id, body.response, body.responseNote);
   }
 
   @Get(':id')
@@ -220,13 +239,7 @@ export class MeetingsController {
   async updateMeetingRange(
     @Request() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body()
-    body: {
-      dateRangeStart?: string;
-      dateRangeEnd?: string;
-      timeRangeStart?: number;
-      timeRangeEnd?: number;
-    },
+    @Body() body: UpdateMeetingRangeDto,
   ) {
     return this.meetingsService.updateMeetingRange(id, req.user.id, {
       dateRangeStart: body.dateRangeStart ? new Date(body.dateRangeStart) : undefined,
@@ -256,12 +269,7 @@ export class MeetingsController {
   async confirmMeeting(
     @Request() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body()
-    body: {
-      startTime: string;
-      endTime: string;
-      meetingLink?: string;
-    },
+    @Body() body: ConfirmMeetingDto,
   ) {
     return this.meetingsService.confirmMeeting(
       id,
@@ -392,13 +400,7 @@ export class MeetingsController {
   async requestHoursOverride(
     @Request() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body() body: {
-      targetUserId: string;
-      requestedStart: number;
-      requestedEnd: number;
-      requestedDays?: number[];
-      reason?: string;
-    },
+    @Body() body: RequestHoursOverrideDto,
   ) {
     return this.meetingsService.requestHoursOverride(
       id, req.user.id, body.targetUserId,
@@ -407,40 +409,4 @@ export class MeetingsController {
     );
   }
 
-  @Get('override-requests')
-  @UseGuards(SessionAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'List override requests', description: 'List hours override requests for the authenticated user' })
-  @ApiQuery({ name: 'filter', required: false, enum: ['pending', 'all'] })
-  @ApiResponse({ status: 200, description: 'Override requests returned' })
-  async getHoursOverrideRequests(
-    @Request() req: AuthenticatedRequest,
-    @Query('filter') filter?: 'pending' | 'all',
-  ) {
-    return this.meetingsService.getHoursOverrideRequests(req.user.id, filter);
-  }
-
-  @Patch('override-requests/:overrideId/respond')
-  @UseGuards(SessionAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Respond to override request', description: 'Approve or decline an hours override request' })
-  @ApiParam({ name: 'overrideId', description: 'Override request ID' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      required: ['response'],
-      properties: {
-        response: { type: 'string', enum: ['APPROVED', 'DECLINED'] },
-        responseNote: { type: 'string', description: 'Optional note with response' },
-      },
-    },
-  })
-  @ApiResponse({ status: 200, description: 'Override request responded to' })
-  async respondToHoursOverride(
-    @Request() req: AuthenticatedRequest,
-    @Param('overrideId') overrideId: string,
-    @Body() body: { response: 'APPROVED' | 'DECLINED'; responseNote?: string },
-  ) {
-    return this.meetingsService.respondToHoursOverride(overrideId, req.user.id, body.response, body.responseNote);
-  }
 }

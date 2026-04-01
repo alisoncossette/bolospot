@@ -4,9 +4,10 @@ import { GrantsController } from './grants.controller';
 import { PrismaModule } from '../../prisma/prisma.module';
 import { ApiKeysModule } from '../api-keys/api-keys.module';
 import { AuthModule } from '../auth/auth.module';
+import { EmailModule } from '../email/email.module';
 
 @Module({
-  imports: [PrismaModule, ApiKeysModule, AuthModule],
+  imports: [PrismaModule, ApiKeysModule, AuthModule, EmailModule],
   controllers: [GrantsController],
   providers: [GrantsService],
   exports: [GrantsService],

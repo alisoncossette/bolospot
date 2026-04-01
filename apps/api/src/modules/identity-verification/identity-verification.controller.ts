@@ -24,6 +24,23 @@ class VerifyPhoneDto {
   firebaseIdToken: string;
 }
 
+class VerifyWorldIdDto {
+  @IsString()
+  merkle_root: string;
+
+  @IsString()
+  nullifier_hash: string;
+
+  @IsString()
+  proof: string;
+
+  @IsString()
+  verification_level: string;
+
+  @IsString()
+  action: string;
+}
+
 class UpdateVisibilityDto {
   @IsString()
   visibility: string;
@@ -72,6 +89,26 @@ export class IdentityVerificationController {
     return this.identityVerificationService.verifyPhoneWithFirebase(
       req.user.id,
       dto.firebaseIdToken,
+    );
+  }
+
+  @Post('verify-world-id')
+  @UseGuards(SessionAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Verify identity with World ID' })
+  async verifyWorldId(
+    @Request() req: AuthenticatedRequest,
+    @Body() dto: VerifyWorldIdDto,
+  ) {
+    return this.identityVerificationService.verifyWithWorldId(
+      req.user.id,
+      {
+        merkle_root: dto.merkle_root,
+        nullifier_hash: dto.nullifier_hash,
+        proof: dto.proof,
+        verification_level: dto.verification_level,
+      },
+      dto.action,
     );
   }
 

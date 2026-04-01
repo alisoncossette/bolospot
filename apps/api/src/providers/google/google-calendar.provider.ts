@@ -67,9 +67,11 @@ export class GoogleCalendarProvider {
       isAllDay: !event.start.dateTime,
       status: event.status?.toUpperCase() || 'CONFIRMED',
       showAs: event.transparency === 'transparent' ? 'FREE' : 'BUSY',
+      visibility: event.visibility || 'default',
       externalUrl: event.htmlLink || null,
       // Extract Bolo meeting ID if this event was created by Bolo
       boloMeetingId: event.extendedProperties?.private?.boloMeetingId || null,
+      isBoloBusyBlock: event.extendedProperties?.private?.boloBusyBlock === 'true',
     }));
   }
 

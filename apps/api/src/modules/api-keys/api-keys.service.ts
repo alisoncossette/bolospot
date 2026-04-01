@@ -5,6 +5,8 @@ import { createHash, randomBytes } from 'crypto';
 interface CreateApiKeyDto {
   name: string;
   permissions: string[];
+  keyType?: 'personal' | 'widget';
+  widgetSlug?: string;
 }
 
 @Injectable()
@@ -16,10 +18,12 @@ export class ApiKeysService {
    * Returns the full key (only shown once) and the created record.
    */
   async createApiKey(userId: string, dto: CreateApiKeyDto) {
-    // Generate a secure random key: bolo_live_<32 random chars>
+    const keyType = dto.keyType || 'personal';
+    const prefix = keyType === 'widget' ? 'bolo_widget_' : 'bolo_live_';
+
     const randomPart = randomBytes(24).toString('base64url');
-    const fullKey = `bolo_live_${randomPart}`;
-    const keyPrefix = fullKey.substring(0, 16); // "bolo_live_abc..."
+    const fullKey = `${prefix}${randomPart}`;
+    const keyPrefix = fullKey.substring(0, prefix.length + 6);
     const keyHash = this.hashKey(fullKey);
 
     const apiKey = await this.prisma.apiKey.create({
@@ -28,6 +32,8 @@ export class ApiKeysService {
         name: dto.name,
         keyHash,
         keyPrefix,
+        keyType,
+        widgetSlug: dto.widgetSlug || null,
         permissions: dto.permissions,
       },
       select: {
@@ -142,6 +148,8 @@ export class ApiKeysService {
       apiKey: {
         id: apiKey.id,
         permissions: apiKey.permissions,
+        keyType: apiKey.keyType,
+        widgetSlug: apiKey.widgetSlug,
       },
       user: apiKey.user,
     };

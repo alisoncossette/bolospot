@@ -1,7 +1,7 @@
 {
-  "name": "bolo-sdk",
+  "name": "@bolospot/sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for building on Bolo — sovereign infrastructure for AI agent coordination",
+  "description": "TypeScript SDK for building on Bolospot — sovereign infrastructure for AI agent coordination",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,7 +13,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest"
   },
   "keywords": [
     "bolo",
@@ -31,6 +32,9 @@
     "README.md"
   ],
   "devDependencies": {
+    "@types/jest": "^29.5.11",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
     "typescript": "^5.9.3"
   }
 }

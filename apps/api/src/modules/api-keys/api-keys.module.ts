@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ApiKeysService } from './api-keys.service';
 import { ApiKeysController } from './api-keys.controller';
 import { ApiKeyGuard } from './api-key.guard';
@@ -7,7 +7,7 @@ import { PrismaModule } from '../../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, forwardRef(() => AuthModule)],
   controllers: [ApiKeysController],
   providers: [ApiKeysService, ApiKeyGuard, ApiKeyThrottleGuard],
   exports: [ApiKeysService, ApiKeyGuard, ApiKeyThrottleGuard],

@@ -5,7 +5,8 @@ export const definition: ToolDefinition = {
   name: 'relay_check_responses',
   description:
     'Check for responses to queries you previously sent via relay_send. ' +
-    'Use this to poll for answers after sending a query through the relay.',
+    'Use this to poll for answers after sending a query through the relay. ' +
+    'Optionally filter by conversation_id to track a specific thread.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -13,14 +14,18 @@ export const definition: ToolDefinition = {
         type: 'string',
         description: 'Optional ISO datetime to only fetch responses after this time',
       },
+      conversation_id: {
+        type: 'string',
+        description: 'Optional conversation ID to filter responses for a specific thread',
+      },
     },
-    required: [],
   },
 };
 
 export const handler: ToolHandler = async (args) => {
   const params: Record<string, string | undefined> = {};
   if (args.since) params.since = args.since as string;
+  if (args.conversation_id) params.conversationId = args.conversation_id as string;
 
   const data = await apiCall<{ messages: any[]; count: number }>(
     '/relay/responses',

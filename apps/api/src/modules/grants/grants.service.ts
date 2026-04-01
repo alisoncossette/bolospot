@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException, ConflictException, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
 
 interface CreateGrantDto {
-  granteeHandle: string;
+  granteeHandle?: string;
+  granteeEmail?: string;
   widget: string;
   scopes: string[];
   note?: string;
@@ -21,7 +23,35 @@ interface RequestAccessDto {
 export class GrantsService {
   private readonly logger = new Logger(GrantsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private emailService: EmailService,
+  ) {}
+
+  // ─── Audit trail (append-only) ──────────────────────────────────────
+  // Fire-and-forget: never blocks the request path
+  private audit(
+    userId: string,
+    action: string,
+    details: Record<string, unknown>,
+    status: 'SUCCESS' | 'DENIED' | 'ERROR' = 'SUCCESS',
+    extra?: { agentName?: string; requestorHandle?: string; requestorEmail?: string; errorMessage?: string },
+  ) {
+    this.prisma.auditLog
+      .create({
+        data: {
+          userId,
+          action,
+          actionDetails: details as any,
+          status,
+          agentName: extra?.agentName,
+          requestorHandle: extra?.requestorHandle,
+          requestorEmail: extra?.requestorEmail,
+          errorMessage: extra?.errorMessage,
+        },
+      })
+      .catch((err) => this.logger.error(`Audit write failed: ${err.message}`));
+  }
 
   // ─── Identity helpers ───────────────────────────────────────────────
 
@@ -35,6 +65,40 @@ export class GrantsService {
       select: { handle: true },
     });
     return user?.handle || null;
+  }
+
+  /**
+   * Count pending email-based grants for a given email.
+   * Public endpoint — returns count + grantor names only, no scope details.
+   */
+  async countPendingGrantsByEmail(email: string) {
+    if (!email) return { count: 0, grantors: [] };
+
+    const grants = await this.prisma.grant.findMany({
+      where: {
+        granteeEmail: { equals: email.toLowerCase().trim(), mode: 'insensitive' },
+        granteeHandle: null,
+        isActive: true,
+        revokedAt: null,
+      },
+      select: {
+        grantorId: true,
+        grantor: { select: { name: true, handle: true } },
+      },
+    });
+
+    // Deduplicate grantors (one person may have granted multiple widgets)
+    const uniqueGrantors = new Map<string, { name: string | null; handle: string }>();
+    for (const g of grants) {
+      if (!uniqueGrantors.has(g.grantorId)) {
+        uniqueGrantors.set(g.grantorId, { name: g.grantor.name, handle: g.grantor.handle });
+      }
+    }
+
+    return {
+      count: grants.length,
+      grantors: [...uniqueGrantors.values()].map((g) => g.name || `@${g.handle}`),
+    };
   }
 
   // ─── Permission Categories (Bolo-controlled, not a marketplace) ────
@@ -165,10 +229,10 @@ export class GrantsService {
    * Grant access to another @handle for a specific widget + scopes.
    * This is the core Bolo primitive.
    */
-  async createGrant(grantorId: string, dto: CreateGrantDto) {
-    const cleanHandle = dto.granteeHandle.startsWith('@')
-      ? dto.granteeHandle.slice(1)
-      : dto.granteeHandle;
+  async createGrant(grantorId: string, dto: CreateGrantDto): Promise<Record<string, unknown>> {
+    if (!dto.granteeHandle && !dto.granteeEmail) {
+      throw new ConflictException('Either granteeHandle or granteeEmail is required');
+    }
 
     // Validate widget from Bolo's permission categories
     const widget = await this.getWidget(dto.widget);
@@ -180,6 +244,116 @@ export class GrantsService {
         `No valid scopes for "${dto.widget}". Available: ${widget.scopes.join(', ')}`,
       );
     }
+
+    // ─── Email-based grant path ──────────────────────────────────────
+    if (dto.granteeEmail && !dto.granteeHandle) {
+      const email = dto.granteeEmail.toLowerCase().trim();
+
+      // Check if a user already exists with this email — upgrade to handle-based grant
+      const existingUser = await this.prisma.user.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } },
+        select: { id: true, handle: true },
+      });
+
+      if (existingUser) {
+        // User exists — create a normal handle-based grant
+        return this.createGrant(grantorId, {
+          ...dto,
+          granteeHandle: existingUser.handle,
+          granteeEmail: undefined,
+        });
+      }
+
+      // Also check UserEmail table (secondary emails)
+      const secondaryEmail = await this.prisma.userEmail.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } },
+        include: { user: { select: { id: true, handle: true } } },
+      });
+
+      if (secondaryEmail) {
+        return this.createGrant(grantorId, {
+          ...dto,
+          granteeHandle: secondaryEmail.user.handle,
+          granteeEmail: undefined,
+        });
+      }
+
+      // No user found — create a pending email-based grant
+      const grant = await this.prisma.grant.upsert({
+        where: {
+          grantorId_granteeEmail_widget: {
+            grantorId,
+            granteeEmail: email,
+            widget: dto.widget,
+          },
+        },
+        update: {
+          scopes,
+          note: dto.note,
+          expiresAt: dto.expiresAt || null,
+          isActive: true,
+          revokedAt: null,
+        },
+        create: {
+          grantorId,
+          granteeEmail: email,
+          widget: dto.widget,
+          scopes,
+          note: dto.note,
+          expiresAt: dto.expiresAt || null,
+        },
+      });
+
+      // Get grantor info for the notification email
+      const grantor = await this.prisma.user.findUnique({
+        where: { id: grantorId },
+        select: { name: true, handle: true },
+      });
+
+      // Count total pending grants for this email
+      const pendingCount = await this.prisma.grant.count({
+        where: {
+          granteeEmail: email,
+          granteeHandle: null,
+          isActive: true,
+          revokedAt: null,
+        },
+      });
+
+      // Send notification email (fire-and-forget)
+      this.sendPendingGrantEmail(email, {
+        grantorName: grantor?.name || `@${grantor?.handle}`,
+        grantorHandle: grantor?.handle || 'unknown',
+        pendingCount,
+        widget: widget.name,
+      }).catch((err) => this.logger.error(`Failed to send pending grant email: ${err.message}`));
+
+      this.logger.log(`Email grant created: ${email} → ${dto.widget}:${scopes.join(',')}`);
+      this.audit(grantorId, 'grant.create_email', {
+        grantId: grant.id,
+        granteeEmail: email,
+        widget: dto.widget,
+        scopes,
+        expiresAt: dto.expiresAt || null,
+      });
+
+      return {
+        id: grant.id,
+        granteeEmail: email,
+        granteeHandle: null,
+        widget: grant.widget,
+        scopes: grant.scopes,
+        note: grant.note,
+        expiresAt: grant.expiresAt,
+        granteeRegistered: false,
+        pendingInvite: true,
+      };
+    }
+
+    // ─── Handle-based grant path (existing behavior) ─────────────────
+    const cleanHandle = dto.granteeHandle!.startsWith('@')
+      ? dto.granteeHandle!.slice(1)
+      : dto.granteeHandle!;
 
     // Resolve grantee user ID if they exist
     const grantee = await this.prisma.user.findUnique({
@@ -216,6 +390,13 @@ export class GrantsService {
     });
 
     this.logger.log(`Grant created: @${cleanHandle} → ${dto.widget}:${scopes.join(',')}`);
+    this.audit(grantorId, 'grant.create', {
+      grantId: grant.id,
+      granteeHandle: cleanHandle,
+      widget: dto.widget,
+      scopes,
+      expiresAt: dto.expiresAt || null,
+    });
 
     return {
       id: grant.id,
@@ -226,6 +407,35 @@ export class GrantsService {
       expiresAt: grant.expiresAt,
       granteeRegistered: !!grantee,
     };
+  }
+
+  // ─── Pending grant email notification ────────────────────────────
+  private async sendPendingGrantEmail(
+    email: string,
+    data: { grantorName: string; grantorHandle: string; pendingCount: number; widget: string },
+  ) {
+    const { escapeHtml } = await import('../email/email.service');
+    const claimUrl = `https://bolospot.com/signup?email=${encodeURIComponent(email)}`;
+
+    await this.emailService.sendEmail({
+      to: email,
+      subject: `${data.grantorName} shared ${data.widget} access with you on Bolospot`,
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+          <h2 style="color: #fff; margin-bottom: 8px;">You have ${data.pendingCount} bolo${data.pendingCount > 1 ? 's' : ''} waiting</h2>
+          <p style="color: #aaa; margin-bottom: 24px;">
+            <strong>${escapeHtml(data.grantorName)}</strong> (@${escapeHtml(data.grantorHandle)}) shared ${escapeHtml(data.widget)} access with you on Bolospot.
+          </p>
+          <a href="${claimUrl}" style="display: inline-block; background: #27d558; color: #000; font-weight: 600; padding: 12px 24px; border-radius: 8px; text-decoration: none;">
+            Claim your @handle
+          </a>
+          <p style="color: #666; font-size: 12px; margin-top: 32px;">
+            Bolospot is a permission layer for AI agents. Someone granted you access — sign up to activate it.
+          </p>
+        </div>
+      `,
+      text: `${data.grantorName} (@${data.grantorHandle}) shared ${data.widget} access with you on Bolospot. You have ${data.pendingCount} bolo(s) waiting. Claim your @handle: ${claimUrl}`,
+    });
   }
 
   /**
@@ -246,6 +456,12 @@ export class GrantsService {
     });
 
     this.logger.log(`Grant revoked: ${grantId} — @${grant.granteeHandle} / ${grant.widget} by ${grantorId}`);
+    this.audit(grantorId, 'grant.revoke', {
+      grantId,
+      granteeHandle: grant.granteeHandle,
+      widget: grant.widget,
+      scopes: grant.scopes,
+    });
 
     return { success: true, revoked: `@${grant.granteeHandle} / ${grant.widget}` };
   }
@@ -266,7 +482,7 @@ export class GrantsService {
     });
 
     // Look up grantee verification info
-    const handles = [...new Set(grants.map((g) => g.granteeHandle))];
+    const handles = [...new Set(grants.map((g) => g.granteeHandle).filter((h): h is string => h !== null))];
     const granteeUsers = handles.length > 0
       ? await this.prisma.user.findMany({
           where: { handle: { in: handles } },
@@ -278,10 +494,12 @@ export class GrantsService {
     );
 
     return grants.map((g) => {
-      const verification = verificationMap.get(g.granteeHandle);
+      const verification = g.granteeHandle ? verificationMap.get(g.granteeHandle) : undefined;
       return {
         id: g.id,
-        granteeHandle: `@${g.granteeHandle}`,
+        granteeHandle: g.granteeHandle ? `@${g.granteeHandle}` : null,
+        granteeEmail: g.granteeEmail || null,
+        pendingInvite: !g.granteeHandle && !!g.granteeEmail,
         widget: g.widget,
         scopes: g.scopes,
         note: g.note,
@@ -321,7 +539,7 @@ export class GrantsService {
 
     return grants.map((g) => ({
       id: g.id,
-      grantorHandle: `@${g.grantor.handle}`,
+      grantorHandle: g.grantor.handle,
       grantorName: g.grantor.name,
       verified: g.grantor.verificationLevel !== 'BASIC',
       widget: g.widget,
@@ -353,7 +571,7 @@ export class GrantsService {
         handle: `@${cleanTarget}`,
         exists: false,
         message: `@${cleanTarget} is not on Bolo yet`,
-        claimUrl: `https://bolospot.com/@${cleanTarget}`,
+        claimUrl: `https://bolospot.com/b/${cleanTarget}`,
       };
     }
 
@@ -451,16 +669,27 @@ export class GrantsService {
 
     if (!grant || !grant.isActive || grant.revokedAt) {
       this.logger.warn(`Access denied: @${cleanGrantee} → @${cleanGrantor} ${widget}:${scope} (no active grant)`);
+      if (grantor) {
+        this.audit(grantor.id, 'access.denied', {
+          granteeHandle: cleanGrantee, grantorHandle: cleanGrantor, widget, scope, reason: 'no_active_grant',
+        }, 'DENIED', { requestorHandle: cleanGrantee });
+      }
       return false;
     }
     if (grant.expiresAt && grant.expiresAt < new Date()) {
       this.logger.warn(`Access denied: @${cleanGrantee} → @${cleanGrantor} ${widget}:${scope} (grant expired)`);
+      this.audit(grantor.id, 'access.denied', {
+        granteeHandle: cleanGrantee, grantorHandle: cleanGrantor, widget, scope, reason: 'grant_expired', grantId: grant.id,
+      }, 'DENIED', { requestorHandle: cleanGrantee });
       return false;
     }
 
     const allowed = grant.scopes.includes(scope) || grant.scopes.includes('*');
     if (!allowed) {
       this.logger.warn(`Access denied: @${cleanGrantee} → @${cleanGrantor} ${widget}:${scope} (scope not in grant: ${grant.scopes.join(',')})`);
+      this.audit(grantor.id, 'access.denied', {
+        granteeHandle: cleanGrantee, grantorHandle: cleanGrantor, widget, scope, reason: 'scope_not_granted', grantId: grant.id,
+      }, 'DENIED', { requestorHandle: cleanGrantee });
     }
     return allowed;
   }
@@ -486,7 +715,7 @@ export class GrantsService {
       return {
         success: false,
         message: `@${cleanTarget} is not on Bolo yet`,
-        claimUrl: `https://bolospot.com/@${cleanTarget}`,
+        claimUrl: `https://bolospot.com/b/${cleanTarget}`,
       };
     }
 
@@ -502,6 +731,33 @@ export class GrantsService {
 
     const rHandle = requestorHandle.toLowerCase();
     const tHandle = target.handle.toLowerCase();
+
+    // ─── Self-grant: auto-approve immediately ─────────────────────────
+    // If the requestor IS the target, skip the approval flow entirely
+    // and create an active grant directly. No one should have to approve
+    // their own request to themselves.
+    if (rHandle === tHandle || (requestorId && requestorId === target.id)) {
+      const grant = await this.createGrant(target.id, {
+        granteeHandle: rHandle,
+        widget: dto.widget,
+        scopes: dto.scopes,
+        note: dto.reason,
+      });
+
+      this.logger.log(`Self-grant auto-approved: @${rHandle} ${dto.widget}:${dto.scopes.join(',')}`);
+      this.audit(target.id, 'grant.self_approve', {
+        widget: dto.widget, scopes: dto.scopes, grantId: grant.id,
+      });
+
+      return {
+        success: true,
+        requestId: grant.id,
+        message: `Self-grant auto-approved for @${target.handle}`,
+        widget: dto.widget,
+        scopes: dto.scopes,
+        autoApproved: true,
+      };
+    }
 
     // ─── Anti-spam: duplicate check ────────────────────────────────────
     // Block if there's already a PENDING request for the same requestor+target+widget
@@ -596,6 +852,10 @@ export class GrantsService {
     });
 
     this.logger.log(`Access request: @${rHandle} → @${tHandle} ${dto.widget}:${dto.scopes.join(',')} (agent: ${dto.agentName || 'none'})`);
+    this.audit(target.id, 'access.request', {
+      requestId: request.id, requestorHandle: rHandle, targetHandle: tHandle,
+      widget: dto.widget, scopes: dto.scopes,
+    }, 'SUCCESS', { agentName: dto.agentName, requestorHandle: rHandle });
 
     return {
       success: true,
@@ -640,6 +900,10 @@ export class GrantsService {
     }
 
     this.logger.log(`Request ${approve ? 'APPROVED' : 'DECLINED'}: ${requestId} — @${request.requestorHandle} ${request.widget}:${request.scopes.join(',')}`);
+    this.audit(userId, approve ? 'request.approve' : 'request.decline', {
+      requestId, requestorHandle: request.requestorHandle,
+      widget: request.widget, scopes: request.scopes,
+    }, 'SUCCESS', { requestorHandle: request.requestorHandle });
 
     return {
       success: true,
@@ -852,14 +1116,15 @@ export class GrantsService {
     }
 
     for (const g of grants) {
-      const key = g.granteeHandle;
+      const key = g.granteeHandle || g.granteeEmail;
+      if (!key) continue; // Skip grants with neither handle nor email
       const existing = contactMap.get(key);
       if (existing) {
         existing.hasCreateGrant = g.scopes.includes('events:create');
       } else {
         contactMap.set(key, {
-          handle: `@${g.granteeHandle}`,
-          email: null,
+          handle: g.granteeHandle ? `@${g.granteeHandle}` : null,
+          email: g.granteeEmail || null,
           hasCreateGrant: g.scopes.includes('events:create'),
           autoApproveInvites: false,
           status: 'APPROVED',

@@ -136,6 +136,98 @@ export class EventsService {
     };
   }
 
+  /**
+   * Get events for a user by their @handle, with privacy filtering.
+   * Used by the list_events MCP tool — only returns title + times.
+   * Private events are redacted to "Private event" with times only.
+   */
+  async getEventsByHandle(
+    handle: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<{ events: Array<{ title: string; startTime: string; endTime: string; isAllDay: boolean }>; handle: string }> {
+    const cleanHandle = handle.startsWith('@') ? handle.slice(1) : handle;
+
+    const user = await this.prisma.user.findUnique({
+      where: { handle: cleanHandle },
+      select: {
+        id: true,
+        handle: true,
+        busyBlockTitle: true,
+        calendarConnections: {
+          where: { isEnabled: true },
+          include: {
+            calendars: { where: { isSelected: true } },
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const busyBlockTitle = user.busyBlockTitle || 'Busy (Bolo)';
+    const allEvents: Array<{ title: string; startTime: string; endTime: string; isAllDay: boolean }> = [];
+
+    for (const connection of user.calendarConnections) {
+      try {
+        const accessToken = await this.ensureValidToken(connection);
+
+        for (const calendar of connection.calendars) {
+          let calendarEvents: any[] = [];
+
+          if (connection.provider === 'GOOGLE') {
+            calendarEvents = await this.googleProvider.getEvents(
+              accessToken,
+              calendar.externalId,
+              startDate,
+              endDate,
+            );
+          } else if (connection.provider === 'MICROSOFT') {
+            calendarEvents = await this.microsoftProvider.getEvents(
+              accessToken,
+              calendar.externalId,
+              startDate,
+              endDate,
+            );
+          }
+
+          for (const event of calendarEvents) {
+            // Skip busy block events created by Bolo sync (metadata or description)
+            if (event.isBoloBusyBlock || event.description?.startsWith('Synced by Bolo from')) continue;
+            // Skip cancelled events
+            if (event.status === 'CANCELLED') continue;
+            // Skip free/transparent events
+            if (event.showAs === 'FREE') continue;
+
+            const isPrivate = event.visibility === 'private' || event.visibility === 'confidential';
+
+            allEvents.push({
+              title: isPrivate ? 'Private event' : (event.title || '(No title)'),
+              startTime: event.startTime instanceof Date
+                ? event.startTime.toISOString()
+                : event.startTime,
+              endTime: event.endTime instanceof Date
+                ? event.endTime.toISOString()
+                : event.endTime,
+              isAllDay: event.isAllDay || false,
+            });
+          }
+        }
+      } catch (err) {
+        this.logger.error(`Failed to fetch events for @${cleanHandle} (${connection.provider}): ${err}`);
+      }
+    }
+
+    // Sort by start time
+    allEvents.sort((a, b) =>
+      new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
+    );
+
+    return { events: allEvents, handle: cleanHandle };
+  }
+
   async updateEvent(
     userId: string,
     calendarId: string,
@@ -254,8 +346,8 @@ export class EventsService {
 
       // Map to unified format, filtering out Bolo busy block events
       for (const event of calendarEvents) {
-        // Skip busy block events created by Bolo sync
-        if (event.title === busyBlockTitle || event.title === 'Busy (Bolo)') continue;
+        // Skip busy block events created by Bolo sync (detected via event metadata)
+        if (event.isBoloBusyBlock) continue;
 
         events.push({
           id: event.id,
