@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://bolospot.com"><strong>bolospot.com</strong></a> &middot;
   <a href="https://world.bomed.ai"><strong>world.bomed.ai</strong></a> &middot;
-  <a href="https://www.npmjs.com/package/bolo-mcp">MCP Server</a> &middot;
+  <a href="https://www.npmjs.com/package/@bolospot/mcp">MCP Server</a> &middot;
   <a href="https://bolo-api-650440848480.us-central1.run.app/api/docs">API Docs</a>
 </p>
 
@@ -136,7 +136,7 @@ packages/
 Any AI agent can connect to the trust graph:
 
 ```bash
-BOLO_API_KEY=bolo_live_xxx npx bolo-mcp
+BOLO_API_KEY=bolo_live_xxx npx @bolospot/mcp
 ```
 
 **22 tools** across identity, grants, scheduling, and relay:
